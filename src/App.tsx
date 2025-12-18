@@ -19,12 +19,13 @@ function App() {
   const [fetchingProjectId, setFetchingProjectId] = useState(false);
   const [lastFetchedName, setLastFetchedName] = useState('');
   const [selectedLog, setSelectedLog] = useState<LogRecord | null>(null);
-  const [showManualForm, setShowManualForm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(50); // percentage
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
   const [daysBack, setDaysBack] = useState(30);
+  const [isConfigCollapsed, setIsConfigCollapsed] = useState(false);
+  const [hasAutoCollapsed, setHasAutoCollapsed] = useState(false);
 
   // URL-encode org and project names for URLs
   const orgEncoded = useMemo(() => encodeURIComponent(baseConfig.org), [baseConfig.org]);
@@ -53,6 +54,14 @@ function App() {
   }, [baseConfig.baseUrl, baseConfig.apiKey, projectId, daysBack]);
 
   const { logs, loading, error, refetch } = useLogs(logsParams);
+
+  // Auto-collapse config section when logs are successfully fetched (only once)
+  useEffect(() => {
+    if (logs.length > 0 && !hasAutoCollapsed) {
+      setIsConfigCollapsed(true);
+      setHasAutoCollapsed(true);
+    }
+  }, [logs.length, hasAutoCollapsed]);
 
   const traceConfig: TraceConfig | null = useMemo(() => {
     if (!selectedLog || !projectId) return null;
@@ -244,12 +253,36 @@ function App() {
           </p>
         </header>
 
-        <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800">
-            <strong>Step 1:</strong> Enter your Braintrust credentials, project name, and lookback period. The project ID will be automatically fetched.
-          </div>
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+          <button
+            onClick={() => setIsConfigCollapsed(!isConfigCollapsed)}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-gray-900">Configuration</h2>
+              {projectId && (
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+                  ✓ Ready
+                </span>
+              )}
+            </div>
+            <svg
+              className={`w-5 h-5 text-gray-500 transition-transform ${isConfigCollapsed ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
 
-          <div className="space-y-4">
+          {!isConfigCollapsed && (
+            <div className="px-6 pb-6 space-y-4 border-t border-gray-200">
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800 mt-4">
+                <strong>Step 1:</strong> Enter your Braintrust credentials, project name, and lookback period. The project ID will be automatically fetched.
+              </div>
+
+              <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label
@@ -347,21 +380,13 @@ function App() {
               </p>
             </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={handleFetchLogs}
-                disabled={loading}
-                className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? 'Fetching Logs...' : 'Fetch Recent Logs'}
-              </button>
-              <button
-                onClick={() => setShowManualForm(!showManualForm)}
-                className="px-4 py-2 bg-gray-600 text-white font-medium rounded-md hover:bg-gray-700 active:bg-gray-800 transition-colors"
-              >
-                {showManualForm ? 'Hide Manual Entry' : 'Manual Entry'}
-              </button>
-            </div>
+            <button
+              onClick={handleFetchLogs}
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Fetching Logs...' : 'Fetch Recent Logs'}
+            </button>
 
             {status.type && (
               <div
@@ -382,19 +407,10 @@ function App() {
                 <strong>Error:</strong> {error.message}
               </div>
             )}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
-
-        {showManualForm && (
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h3 className="text-lg font-semibold mb-4">Manual Trace Entry</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              If you have specific trace IDs, you can enter them manually here.
-            </p>
-            {/* TODO: Add manual form fields */}
-            <div className="text-sm text-gray-500 italic">Coming soon...</div>
-          </div>
-        )}
 
         {logs.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm overflow-hidden">
