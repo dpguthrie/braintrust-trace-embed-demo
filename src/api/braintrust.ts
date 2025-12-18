@@ -25,7 +25,7 @@ export function slugify(text: string): string {
 }
 
 export async function fetchProjectByName(
-  baseUrl: string,
+  _baseUrl: string,
   apiKey: string,
   orgName: string,
   projectName: string

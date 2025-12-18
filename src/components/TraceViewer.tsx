@@ -19,7 +19,10 @@ const TraceViewer = forwardRef<TraceViewerRef, TraceViewerProps>(
 
     const buildTraceUrl = (cfg: TraceConfig): string => {
       // Always use /trace route
-      const url = new URL(`${cfg.baseUrl}/app/${cfg.org}/p/${cfg.project}/trace`);
+      // Encode org and project names for the URL path
+      const encodedOrg = encodeURIComponent(cfg.org);
+      const encodedProject = encodeURIComponent(cfg.project);
+      const url = new URL(`${cfg.baseUrl}/app/${encodedOrg}/p/${encodedProject}/trace`);
       url.searchParams.set('api_key', cfg.apiKey);
 
       // Default to project_logs if no object_type specified

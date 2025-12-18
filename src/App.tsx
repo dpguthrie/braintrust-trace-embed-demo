@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import TraceViewer, { type TraceViewerRef } from './components/TraceViewer';
 import LogsTable from './components/LogsTable';
 import { useLogs } from './hooks/useLogs';
-import { fetchProjectByName, slugify } from './api/braintrust';
+import { fetchProjectByName } from './api/braintrust';
 import type { TraceConfig, LogRecord } from './types';
 
 function App() {
@@ -26,8 +26,9 @@ function App() {
   const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
   const [daysBack, setDaysBack] = useState(30);
 
-  // Calculate project slug from project name
-  const projectSlug = useMemo(() => slugify(baseConfig.projectName), [baseConfig.projectName]);
+  // URL-encode org and project names for URLs
+  const orgEncoded = useMemo(() => encodeURIComponent(baseConfig.org), [baseConfig.org]);
+  const projectEncoded = useMemo(() => encodeURIComponent(baseConfig.projectName), [baseConfig.projectName]);
 
   const [status, setStatus] = useState<{
     message: string;
@@ -61,13 +62,39 @@ function App() {
     return {
       baseUrl: baseConfig.baseUrl,
       org: baseConfig.org,
-      project: projectSlug,
+      project: baseConfig.projectName,
       apiKey: baseConfig.apiKey,
       projectId,
       rootSpanId,
       // objectType defaults to 'project_logs' and objectId defaults to projectId in TraceViewer
     };
-  }, [selectedLog, baseConfig, projectId, projectSlug]);
+  }, [selectedLog, baseConfig, projectId]);
+
+  // Build the iframe URL for display (with masked API key)
+  const traceUrl = useMemo(() => {
+    if (!traceConfig) return null;
+
+    const url = new URL(`${traceConfig.baseUrl}/app/${traceConfig.org}/p/${traceConfig.project}/trace`);
+    url.searchParams.set('api_key', '***');
+    url.searchParams.set('object_type', 'project_logs');
+    url.searchParams.set('object_id', traceConfig.projectId);
+    url.searchParams.set('r', traceConfig.rootSpanId);
+
+    return url.toString();
+  }, [traceConfig]);
+
+  // Build the actual URL with real API key for copying
+  const traceUrlWithApiKey = useMemo(() => {
+    if (!traceConfig) return null;
+
+    const url = new URL(`${traceConfig.baseUrl}/app/${traceConfig.org}/p/${traceConfig.project}/trace`);
+    url.searchParams.set('api_key', traceConfig.apiKey);
+    url.searchParams.set('object_type', 'project_logs');
+    url.searchParams.set('object_id', traceConfig.projectId);
+    url.searchParams.set('r', traceConfig.rootSpanId);
+
+    return url.toString();
+  }, [traceConfig]);
 
   const showStatus = (message: string, type: 'success' | 'error' | 'info') => {
     setStatus({ message, type });
@@ -272,6 +299,9 @@ function App() {
                   placeholder="your-org"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  URL-encoded: {orgEncoded || '(empty)'}
+                </p>
               </div>
 
               <div>
@@ -293,7 +323,7 @@ function App() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Slugified to: {projectSlug || '(empty)'}
+                  URL-encoded: {projectEncoded || '(empty)'}
                 </p>
               </div>
             </div>
@@ -398,37 +428,58 @@ function App() {
               title="Drag to resize"
             />
 
-            <div className="px-6 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-900">Trace Viewer</h2>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleFullscreen}
-                  className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
-                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                >
-                  {isFullscreen ? (
+            <div className="border-b border-gray-200 bg-gray-50">
+              <div className="px-6 py-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">Trace Viewer</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleFullscreen}
+                    className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
+                    title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  >
+                    {isFullscreen ? (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9h6v6" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                      </svg>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setSelectedLog(null)}
+                    className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
+                    title="Close trace viewer"
+                  >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9h6v6" />
                     </svg>
-                  ) : (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                    </svg>
-                  )}
-                </button>
-                <button
-                  onClick={() => setSelectedLog(null)}
-                  className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
-                  title="Close trace viewer"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                  </button>
+                </div>
               </div>
+              {traceUrl && traceUrlWithApiKey && (
+                <div className="px-6 py-3 border-t border-gray-200 bg-white">
+                  <div className="flex items-center gap-2">
+                    <code className="block text-xs text-gray-700 bg-gray-50 px-3 py-2 rounded border border-gray-200 overflow-x-auto whitespace-nowrap flex-1 font-mono">
+                      {traceUrl}
+                    </code>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(traceUrlWithApiKey);
+                        showStatus('URL copied to clipboard!', 'success');
+                      }}
+                      className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-colors flex-shrink-0"
+                      title="Copy URL to clipboard"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="h-[calc(100%-52px)]">
+            <div className="h-[calc(100%-108px)]">
               <TraceViewer
                 ref={traceViewerRef}
                 config={traceConfig}
