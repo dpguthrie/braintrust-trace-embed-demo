@@ -31,16 +31,8 @@ export async function fetchProjectByName(
   projectName: string
 ): Promise<Project | null> {
   try {
-    // Build URL with query parameters
-    let url: URL;
-    if (import.meta.env.DEV) {
-      // In dev mode, use relative path with window.location as base
-      url = new URL('/api/v1/project', window.location.origin);
-    } else {
-      // In production, use full API URL
-      const apiBaseUrl = baseUrl.replace('www.braintrust.dev', 'api.braintrust.dev');
-      url = new URL('/v1/project', apiBaseUrl);
-    }
+    // Use relative path - will be proxied through serverless function in production
+    const url = new URL('/api/v1/project', window.location.origin);
 
     // Add query parameters for filtering
     url.searchParams.set('project_name', projectName);
@@ -82,11 +74,10 @@ export async function fetchRecentLogs(params: FetchLogsParams): Promise<LogRecor
     LIMIT ${limit}
   `;
 
-  // Use proxy endpoint for development to avoid CORS issues
-  // In production, you would use a backend proxy or configure CORS
-  const apiEndpoint = import.meta.env.DEV
-    ? '/api/btql'  // Proxied through Vite dev server
-    : 'https://api.braintrust.dev/btql';  // Direct API call (would need CORS or backend proxy)
+  // Use proxy endpoint to avoid CORS issues and keep API key secure
+  // In dev: proxied through Vite dev server
+  // In production: proxied through serverless function
+  const apiEndpoint = '/api/btql';
 
   const response = await fetch(apiEndpoint, {
     method: 'POST',
