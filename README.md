@@ -124,35 +124,7 @@ Embedding the Braintrust trace viewer as an iframe provides:
 4. **Security**: Braintrust handles authentication and data access control
 5. **Zero Maintenance**: No need to replicate or maintain the trace visualization logic
 
-### Alternative Approaches (and why we don't use them)
-
-**1. Component Library**
-```typescript
-import { TraceViewer } from '@braintrust/trace-viewer';
-// Not offered - would require exposing internal components
-```
-- ❌ Requires maintaining a public component API
-- ❌ Version compatibility issues between your app and Braintrust
-- ❌ Large bundle size from visualization dependencies
-
-**2. Data Export + Custom UI**
-```typescript
-const traceData = await fetchTrace(spanId);
-// You build your own visualization
-```
-- ❌ You must build and maintain visualization logic
-- ❌ Missing Braintrust's advanced features (filtering, search, export)
-- ❌ Inconsistent UX between embedded view and Braintrust platform
-
-**3. Deep Link to Braintrust**
-```typescript
-window.open(`https://braintrust.dev/trace/${spanId}`, '_blank');
-```
-- ❌ Takes users away from your application
-- ❌ Requires separate authentication context
-- ❌ Can't integrate with your app's workflow
-
-**iframe embedding** gives you the best of all worlds: full functionality, zero maintenance, seamless integration.
+**iframe embedding** gives you the best of all worlds: full functionality, zero maintenance, and seamless integration into your application.
 
 ## Project Structure
 
@@ -189,14 +161,14 @@ Instead of manually entering trace IDs, the app uses the **Braintrust BTQL API**
 const query = `
   SELECT *
   FROM project_logs('${projectId}')
-  WHERE created >= NOW() - INTERVAL 7 DAY
-    AND (root_span_id IS NULL OR root_span_id = id)
-  ORDER BY created DESC
-  LIMIT 50
+  WHERE created >= NOW() - INTERVAL ${daysBack} DAY
+    AND is_root
+  ORDER BY _pagination_key DESC
+  LIMIT ${limit}
 `;
 ```
 
-**Note:** The query filters to only return **root spans** (traces), not individual child spans. This gives a cleaner view in the table. When you click a root span, the trace viewer automatically loads and displays the entire trace tree with all child spans.
+**Note:** The query uses `is_root` to filter for only root spans (traces), not individual child spans. This gives a cleaner view in the table. When you click a root span, the trace viewer automatically loads and displays the entire trace tree with all child spans.
 
 The API returns log records with all the information needed:
 - `id` - Log identifier
@@ -240,14 +212,7 @@ This demo uses the **project logs route** because we're fetching raw logs from `
 
 ### Security
 
-The Braintrust middleware handles API key authentication securely:
-
-1. The `api_key` query parameter is intercepted by Braintrust's middleware
-2. A cryptographically signed token is generated using HMAC-SHA256
-3. The API key is removed from the URL for security
-4. The signed token is passed in the `x-braintrust-url-api-key` header
-
-Trace pages specifically allow iframe embedding by skipping restrictive security headers (X-Frame-Options, CSP frame-ancestors).
+Braintrust handles API key authentication securely when embedding trace viewers. The API key is passed via query parameters and processed server-side to ensure secure access to your traces while allowing iframe embedding.
 
 ## Technical Architecture
 
@@ -335,68 +300,15 @@ Here's the end-to-end flow when you use this demo:
 - Handles user interactions
 - Coordinates between components
 
-### How Braintrust Makes This Possible
+### How Embedding Works
 
-**1. Dedicated Trace Route**
-```
-/app/[org]/p/[project]/trace
-```
-This route is specifically designed for iframe embedding:
-- Accepts `api_key` query parameter
-- Skips `X-Frame-Options` header (normally `SAMEORIGIN`)
-- Skips CSP `frame-ancestors` directive
-- Accepts `object_type`, `object_id`, `r` (root_span), `s` (selected_span) parameters
+Braintrust provides dedicated routes for embedding trace viewers via iframe. These routes:
+- Accept API key authentication via query parameters
+- Support iframe embedding with appropriate security headers
+- Accept parameters like `r` (root_span) and `s` (selected_span) for navigation
+- Provide full trace visualization functionality
 
-**2. Middleware Authentication** (`middleware.ts`)
-```typescript
-// Braintrust middleware intercepts trace page requests
-if (isTracePage && hasApiKey) {
-  // Sign the API key with HMAC
-  const timestamp = Date.now().toString();
-  const signature = createHmac(`${timestamp}||${apiKey}`);
-  const token = `${timestamp}.${signature}`;
-
-  // Remove api_key from URL, pass signed token
-  headers.set('x-braintrust-url-api-key', token);
-  url.searchParams.delete('api_key');
-}
-```
-
-**3. postMessage Protocol** (`clientpage.tsx`)
-```typescript
-// Trace viewer listens for messages
-window.addEventListener('message', (event) => {
-  const { r, s } = event.data;  // root_span, selected_span
-  if (r || s) {
-    setActiveRowAndSpan({ ...(r && { r }), ...(s && { s }) });
-    setResetScrollTo(true);
-  }
-});
-```
-
-**4. BTQL Query API**
-```typescript
-POST https://api.braintrust.dev/btql
-Authorization: Bearer sk_...
-
-{
-  "query": "SELECT * FROM project_logs('proj-uuid') LIMIT 50",
-  "fmt": "json"
-}
-```
-
-### Key Implementation Files in Braintrust Codebase
-
-From the Braintrust monorepo, here are the key files that enable embedding:
-
-| File | Purpose |
-|------|---------|
-| `app/middleware.ts:73-134` | API key authentication & iframe security headers |
-| `app/app/[org]/p/[project]/trace/page.tsx` | Server-side trace page entry point |
-| `app/app/[org]/p/[project]/trace/clientpage.tsx` | Client component with postMessage support |
-| `app/ui/trace/trace.tsx` | Core trace visualization component |
-| `app/security/headers.ts` | Security header configuration |
-| `typespecs/src/api_types.ts` | TypeScript types for spans and logs |
+The trace viewer also supports `postMessage` communication, allowing your application to programmatically control which span is selected or navigate between traces.
 
 ## How to Extend This Demo
 
@@ -738,27 +650,7 @@ All environment variables must be prefixed with `VITE_` to be accessible in the 
 
 ## Finding Your Project ID
 
-**Good news:** The app automatically fetches your project ID from the project slug! 🎉
-
-The project ID (UUID) is fetched automatically when you provide:
-- Organization name
-- Project slug
-- API key
-
-If auto-detection fails or you want to use a different project, you can manually enter the UUID:
-
-1. **From the Braintrust UI**:
-   - Go to your project settings
-   - Look for "Project ID" in the details
-
-2. **From the URL**:
-   - Navigate to your project's logs page
-   - The URL will contain the project ID
-
-3. **Via API** (what the app does automatically):
-   - Call the `/v1/project` endpoint to list projects
-   - Find your project by matching org name and project slug
-   - Extract the `id` field
+The app automatically fetches your project ID (UUID) from the project slug when you provide your organization name, project slug, and API key. If needed, you can also manually enter the project UUID which can be found in your project settings in the Braintrust UI.
 
 ## Use Cases
 
