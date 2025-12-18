@@ -2,6 +2,8 @@
 
 A modern React + TypeScript application demonstrating how to embed the Braintrust trace viewer as an iframe in your own application. **Browse logs via the Braintrust API and click to view traces** - no manual ID entry required!
 
+![Braintrust Trace Viewer Embed Demo](images/trace_viewer_iframe.png)
+
 ## Features
 
 - **Modern Stack**: React 19 + TypeScript + Vite
