@@ -6,11 +6,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Get API key from environment variables
-  const apiKey = process.env.VITE_BRAINTRUST_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured' });
+  // Get API key from Authorization header (sent by client)
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid authorization header' });
   }
+
+  const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
 
   try {
     // Build URL with query parameters

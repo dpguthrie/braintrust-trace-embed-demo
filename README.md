@@ -34,7 +34,9 @@ cd ~/repos/braintrust-trace-embed-demo
 pnpm install
 ```
 
-### 2. Configure Environment
+### 2. Configure Environment (Optional)
+
+**Option A: Use Environment Variables (for development)**
 
 Copy the example environment file and fill in your Braintrust details:
 
@@ -50,6 +52,10 @@ VITE_BRAINTRUST_ORG=your-org
 VITE_BRAINTRUST_PROJECT=your-project
 VITE_BRAINTRUST_API_KEY=sk_your_api_key
 ```
+
+**Option B: Enter Credentials in UI (works in production)**
+
+Skip the `.env` file and enter your credentials directly in the web interface. This is how the app works when deployed to Vercel or other hosting platforms.
 
 That's it! No need to manually enter trace IDs.
 
@@ -641,14 +647,16 @@ Pick the extensions that best serve your use case!
 
 ## Environment Variables
 
+Environment variables are **optional** and only used to pre-fill the UI fields. Users can enter credentials directly in the web interface.
+
 All environment variables must be prefixed with `VITE_` to be accessible in the browser:
 
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `VITE_BRAINTRUST_URL` | Yes | Your Braintrust instance URL | `https://www.braintrust.dev` |
-| `VITE_BRAINTRUST_ORG` | Yes | Your organization slug | `my-company` |
-| `VITE_BRAINTRUST_PROJECT` | Yes | Your project slug (for URLs) | `my-project` |
-| `VITE_BRAINTRUST_API_KEY` | Yes | Your API key | `sk_1234567890abcdef` |
+| `VITE_BRAINTRUST_URL` | No | Your Braintrust instance URL | `https://www.braintrust.dev` |
+| `VITE_BRAINTRUST_ORG` | No | Your organization name | `my-company` |
+| `VITE_BRAINTRUST_PROJECT` | No | Your project name | `my-project` |
+| `VITE_BRAINTRUST_API_KEY` | No | Your API key | `sk_1234567890abcdef` |
 
 ## Finding Your Project ID
 
