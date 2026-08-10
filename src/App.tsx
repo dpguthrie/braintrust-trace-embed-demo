@@ -4,7 +4,6 @@ import {
   BarChart3,
   ChevronDown,
   Code2,
-  Copy,
   ExternalLink,
   Maximize2,
   Minimize2,
@@ -13,7 +12,6 @@ import {
   Search,
   Settings2,
   Sparkles,
-  X,
 } from 'lucide-react';
 import {
   fetchConnectionCatalog,
@@ -53,7 +51,6 @@ function App() {
   const [panelWidth, setPanelWidth] = useState(54);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
-  const [toast, setToast] = useState('');
 
   useEffect(() => {
     const apiKey = baseConfig.apiKey.trim();
@@ -175,34 +172,10 @@ function App() {
     };
   }, [baseConfig, projectId, selectedLog]);
 
-  const traceUrl = useMemo(() => {
-    if (!traceConfig) return null;
-    const url = new URL(
-      `${traceConfig.baseUrl}/app/${encodeURIComponent(traceConfig.org)}/p/${encodeURIComponent(traceConfig.project)}/trace`,
-    );
-    url.searchParams.set('api_key', '••••••••');
-    url.searchParams.set('object_type', 'project_logs');
-    url.searchParams.set('object_id', traceConfig.projectId);
-    url.searchParams.set('r', traceConfig.rootSpanId);
-    return url.toString();
-  }, [traceConfig]);
-
-  const traceUrlWithKey = useMemo(() => {
-    if (!traceConfig) return null;
-    const url = new URL(
-      `${traceConfig.baseUrl}/app/${encodeURIComponent(traceConfig.org)}/p/${encodeURIComponent(traceConfig.project)}/trace`,
-    );
-    url.searchParams.set('api_key', traceConfig.apiKey);
-    url.searchParams.set('object_type', 'project_logs');
-    url.searchParams.set('object_id', traceConfig.projectId);
-    url.searchParams.set('r', traceConfig.rootSpanId);
-    return url.toString();
-  }, [traceConfig]);
-
-  const showToast = (message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(''), 2200);
-  };
+  const closeTraceViewer = useCallback(() => {
+    setSelectedLog(null);
+    setIsFullscreen(false);
+  }, []);
 
   const updateConfig = (field: keyof typeof baseConfig, value: string) => {
     setBaseConfig((current) => ({ ...current, [field]: value }));
@@ -235,6 +208,15 @@ function App() {
       document.body.style.userSelect = '';
     };
   }, [handleMouseMove, isResizing]);
+
+  useEffect(() => {
+    if (!traceConfig) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeTraceViewer();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [closeTraceViewer, traceConfig]);
 
   return (
     <div className="min-h-screen bg-[#f6f7fb] text-slate-900">
@@ -443,66 +425,55 @@ function App() {
       </main>
 
       {traceConfig && (
-        <aside
-          className="fixed right-0 top-0 z-50 h-screen border-l border-slate-200 bg-white shadow-2xl"
-          style={{ width: isFullscreen ? '100vw' : `${panelWidth}vw` }}
-        >
+        <>
           {!isFullscreen && (
             <button
               type="button"
-              onMouseDown={() => setIsResizing(true)}
-              className="absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition hover:bg-violet-500/40"
-              aria-label="Resize trace viewer"
+              tabIndex={-1}
+              onClick={closeTraceViewer}
+              className="fixed inset-0 z-40 cursor-default bg-slate-950/10 backdrop-blur-[1px]"
+              aria-label="Close trace viewer"
             />
           )}
-          <div className="flex h-full flex-col">
-            <div className="border-b border-slate-200 bg-white">
-              <div className="flex items-center justify-between px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg bg-violet-50 p-1.5 text-violet-600"><Activity className="h-4 w-4" /></span>
-                  <div>
-                    <h2 className="text-sm font-semibold text-slate-900">Embedded trace viewer</h2>
-                    <p className="text-[10px] text-slate-400">Rendered by Braintrust</p>
+          <aside
+            className="fixed right-0 top-0 z-50 h-screen border-l border-slate-200 bg-white shadow-2xl"
+            style={{ width: isFullscreen ? '100vw' : `${panelWidth}vw` }}
+          >
+            {!isFullscreen && (
+              <button
+                type="button"
+                onMouseDown={() => setIsResizing(true)}
+                className="absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition hover:bg-violet-500/40"
+                aria-label="Resize trace viewer"
+              />
+            )}
+            <div className="flex h-full flex-col">
+              <div className="border-b border-slate-200 bg-white">
+                <div className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-lg bg-violet-50 p-1.5 text-violet-600"><Activity className="h-4 w-4" /></span>
+                    <div>
+                      <h2 className="text-sm font-semibold text-slate-900">Embedded trace viewer</h2>
+                      <p className="text-[10px] text-slate-400">Rendered by Braintrust</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <IconButton label="Reload trace" onClick={() => traceViewerRef.current?.reload()}><RefreshCw className="h-4 w-4" /></IconButton>
+                    <IconButton label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setIsFullscreen((value) => !value)}>
+                      {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                    </IconButton>
+                    <IconButton label="Close trace viewer" onClick={closeTraceViewer}><PanelRightClose className="h-4 w-4" /></IconButton>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  <IconButton label="Reload trace" onClick={() => traceViewerRef.current?.reload()}><RefreshCw className="h-4 w-4" /></IconButton>
-                  <IconButton label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setIsFullscreen((value) => !value)}>
-                    {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                  </IconButton>
-                  <IconButton label="Close trace viewer" onClick={() => setSelectedLog(null)}><PanelRightClose className="h-4 w-4" /></IconButton>
-                </div>
               </div>
-              {traceUrl && traceUrlWithKey && (
-                <div className="flex items-center gap-2 border-t border-slate-100 bg-slate-50 px-4 py-2">
-                  <code className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{traceUrl}</code>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(traceUrlWithKey);
-                      showToast('Trace URL copied');
-                    }}
-                    className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-violet-700"
-                    aria-label="Copy trace URL"
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
+              <div className="min-h-0 flex-1">
+                <TraceViewer ref={traceViewerRef} config={traceConfig} />
+              </div>
             </div>
-            <div className="min-h-0 flex-1">
-              <TraceViewer ref={traceViewerRef} config={traceConfig} />
-            </div>
-          </div>
-        </aside>
+          </aside>
+        </>
       )}
 
-      {toast && (
-        <div className="fixed bottom-5 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-xs font-medium text-white shadow-xl">
-          <Copy className="h-3.5 w-3.5" /> {toast}
-          <button type="button" onClick={() => setToast('')} aria-label="Dismiss"><X className="h-3 w-3 text-slate-400" /></button>
-        </div>
-      )}
     </div>
   );
 }
