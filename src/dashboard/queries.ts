@@ -30,14 +30,13 @@ ORDER BY bucket ASC`,
       key: 'latency',
       name: 'Latency',
       description:
-        'Daily p50 and p95 span duration across application traffic, excluding spans created by online scorers.',
+        'Daily p50 and p95 root-span duration, computed from metrics.end - metrics.start like Braintrust’s built-in Monitor preset.',
       sql: `SELECT
   date_trunc('day', created) AS bucket,
-  percentile(metrics.duration, 0.50) AS p50_duration,
-  percentile(metrics.duration, 0.95) AS p95_duration
+  percentile(CASE WHEN is_root THEN metrics.end - metrics.start ELSE NULL END, 0.50) AS p50_duration,
+  percentile(CASE WHEN is_root THEN metrics.end - metrics.start ELSE NULL END, 0.95) AS p95_duration
 FROM ${source}
 WHERE ${range}
-  AND metrics.duration IS NOT NULL
   AND ${excludeScorers}
 GROUP BY date_trunc('day', created)
 ORDER BY bucket ASC`,
@@ -111,7 +110,6 @@ ORDER BY bucket ASC`,
 FROM ${source}
 UNPIVOT (value FOR score IN (scores))
 WHERE ${range}
-  AND value IS NOT NULL
 GROUP BY date_trunc('day', created), score
 ORDER BY bucket ASC`,
     },

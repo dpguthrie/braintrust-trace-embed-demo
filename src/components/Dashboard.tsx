@@ -97,6 +97,17 @@ function bucketLabel(value: string): string {
     : date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
 }
 
+function tooltipDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+}
+
 function total(rows: MonitorRow[], key: keyof MonitorRow): number {
   return rows.reduce((sum, row) => sum + numberValue(row[key]), 0);
 }
@@ -195,13 +206,21 @@ export default function Dashboard({
   );
   const llmCost = useMemo(
     () =>
-      results.cost.rows.map((row) => ({
-        bucket: String(row.bucket || ''),
-        uncached: numberValue(row.prompt_uncached_cost),
-        completion: numberValue(row.completion_cost),
-        cached: numberValue(row.prompt_cached_cost),
-        cacheWrite: numberValue(row.cache_write_cost),
-      })),
+      results.cost.rows.map((row) => {
+        const uncached = numberValue(row.prompt_uncached_cost);
+        const completion = numberValue(row.completion_cost);
+        const cached = numberValue(row.prompt_cached_cost);
+        const cacheWrite = numberValue(row.cache_write_cost);
+        const componentTotal = uncached + completion + cached + cacheWrite;
+        return {
+          bucket: String(row.bucket || ''),
+          uncached,
+          completion,
+          cached,
+          cacheWrite,
+          unallocated: Math.max(0, numberValue(row.total_cost) - componentTotal),
+        };
+      }),
     [results.cost.rows],
   );
   const tokens = useMemo(
@@ -279,6 +298,12 @@ export default function Dashboard({
     { key: 'completion', name: 'Cost (Completion)', color: '#3425e8', value: total(results.cost.rows, 'completion_cost') },
     { key: 'cached', name: 'Cost (Prompt cache read)', color: '#8b5cf6', value: total(results.cost.rows, 'prompt_cached_cost') },
     { key: 'cacheWrite', name: 'Cost (Cache write)', color: '#9f2caf', value: total(results.cost.rows, 'cache_write_cost') },
+    {
+      key: 'unallocated',
+      name: 'Estimated cost (unallocated)',
+      color: '#14a79b',
+      value: llmCost.reduce((sum, row) => sum + row.unallocated, 0),
+    },
   ].filter((item) => item.value > 0);
   const tokenLegend: SeriesItem[] = [
     { key: 'uncached', name: 'Prompt (uncached)', color: '#f29345', value: total(results.tokens.rows, 'prompt_uncached_tokens') },
@@ -332,7 +357,7 @@ export default function Dashboard({
               <CartesianGrid stroke={GRID_COLOR} vertical={false} />
               <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
               <YAxis tickFormatter={compactNumber} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [integer(Number(value)), name]} />
+              <Tooltip cursor={{ fill: '#f2f3f7' }} content={<MonitorTooltip format={integer} />} />
               <Bar dataKey="other" name="Other spans" stackId="spans" fill="#8b5cf6" />
               <Bar dataKey="llm" name="LLM calls" stackId="spans" fill="#3425e8" />
               <Bar dataKey="tool" name="Tool calls" stackId="spans" fill="#f29345" radius={[2, 2, 0, 0]} />
@@ -349,7 +374,7 @@ export default function Dashboard({
               <CartesianGrid stroke={GRID_COLOR} vertical={false} />
               <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
               <YAxis tickFormatter={(value) => duration(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [duration(Number(value)), name]} />
+              <Tooltip cursor={{ stroke: '#c8ccd5', strokeWidth: 1 }} content={<MonitorTooltip format={duration} />} />
               <Line type="monotone" dataKey="p95" name="P95" stroke="#ef762f" strokeWidth={2.5} dot={false} />
               <Line type="monotone" dataKey="p50" name="P50" stroke="#5b74f9" strokeWidth={2.5} dot={false} />
             </LineChart>
@@ -362,11 +387,12 @@ export default function Dashboard({
               <CartesianGrid stroke={GRID_COLOR} vertical={false} />
               <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
               <YAxis tickFormatter={(value) => cost(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [cost(Number(value)), name]} />
+              <Tooltip cursor={{ fill: '#f2f3f7' }} content={<MonitorTooltip format={cost} />} />
               <Bar dataKey="uncached" name="Prompt uncached" stackId="cost" fill="#f29345" />
               <Bar dataKey="completion" name="Completion" stackId="cost" fill="#3425e8" />
               <Bar dataKey="cached" name="Prompt cache read" stackId="cost" fill="#8b5cf6" />
               <Bar dataKey="cacheWrite" name="Cache write" stackId="cost" fill="#9f2caf" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="unallocated" name="Estimated cost (unallocated)" stackId="cost" fill="#14a79b" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </MonitorCard>
@@ -381,7 +407,7 @@ export default function Dashboard({
               <CartesianGrid stroke={GRID_COLOR} vertical={false} />
               <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
               <YAxis tickFormatter={compactNumber} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [integer(Number(value)), name]} />
+              <Tooltip cursor={{ fill: '#f2f3f7' }} content={<MonitorTooltip format={integer} />} />
               <Bar dataKey="uncached" name="Prompt uncached" stackId="tokens" fill="#f29345" />
               <Bar dataKey="cached" name="Prompt cache read" stackId="tokens" fill="#8b5cf6" />
               <Bar dataKey="completion" name="Completion" stackId="tokens" fill="#3425e8" radius={[2, 2, 0, 0]} />
@@ -500,7 +526,7 @@ function DynamicBarChart({ data, series, format }: { data: ChartPoint[]; series:
         <CartesianGrid stroke={GRID_COLOR} vertical={false} />
         <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
         <YAxis tickFormatter={(value) => compactNumber(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-        <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [format(Number(value)), name]} />
+        <Tooltip cursor={{ fill: '#f2f3f7' }} content={<MonitorTooltip format={format} />} />
         {series.map((item, index) => (
           <Bar key={item.key} dataKey={item.key} name={item.name} stackId="dynamic" fill={item.color} radius={index === series.length - 1 ? [2, 2, 0, 0] : undefined} />
         ))}
@@ -516,7 +542,7 @@ function DynamicLineChart({ data, series, format, domain }: { data: ChartPoint[]
         <CartesianGrid stroke={GRID_COLOR} vertical={false} />
         <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
         <YAxis domain={domain} tickFormatter={(value) => format(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-        <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [format(Number(value)), name]} />
+        <Tooltip cursor={{ stroke: '#c8ccd5', strokeWidth: 1 }} content={<MonitorTooltip format={format} />} />
         {series.map((item) => (
           <Line key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={item.color} strokeWidth={2.4} dot={false} connectNulls />
         ))}
@@ -548,4 +574,59 @@ function ChartState({ result, empty, children }: { result: DashboardQueryResult;
     );
   }
   return <>{children}</>;
+}
+
+function MonitorTooltip({
+  active,
+  payload,
+  label,
+  format,
+}: {
+  active?: boolean;
+  payload?: Array<{
+    name?: string;
+    value?: number | string;
+    color?: string;
+    fill?: string;
+  }>;
+  label?: string | number;
+  format: (value: number) => string;
+}) {
+  if (!active || !payload?.length) return null;
+  const visible = payload.filter((entry) => numberValue(entry.value) !== 0);
+  const entries = visible.length ? visible : payload;
+  const combined = entries.reduce((sum, entry) => sum + numberValue(entry.value), 0);
+  const accent = entries[0]?.color || entries[0]?.fill || '#6d5dfc';
+
+  return (
+    <div className="min-w-[220px] rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_12px_30px_rgba(15,23,42,0.16)]">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-sm font-semibold text-slate-950">{tooltipDate(String(label || ''))}</p>
+        {entries.length > 1 && (
+          <span
+            className="rounded-full px-2.5 py-1 text-[11px] font-semibold text-white"
+            style={{ backgroundColor: accent }}
+          >
+            Total · {format(combined)}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 space-y-2">
+        {entries.map((entry, index) => (
+          <div key={`${entry.name}-${index}`} className="flex items-center justify-between gap-5 text-sm">
+            <span className="flex min-w-0 items-center gap-2 text-slate-500">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: entry.color || entry.fill || '#6d5dfc' }}
+              />
+              <span className="truncate">{entry.name || 'Value'}</span>
+            </span>
+            <span className="shrink-0 font-semibold tabular-nums text-slate-950">
+              {format(numberValue(entry.value))}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

@@ -63,7 +63,7 @@ The dashboard defines nine SQL queries in [`src/dashboard/queries.ts`](src/dashb
 | Query | Powers | Standard Braintrust fields used |
 | --- | --- | --- |
 | Spans | Other spans, LLM calls, and tool calls | `span_attributes.type`, `count` |
-| Latency | Daily p50 and p95 duration | `metrics.duration`, `percentile` |
+| Latency | Daily p50 and p95 root-span duration | `metrics.end - metrics.start`, `percentile` |
 | Total LLM cost | Prompt/cache/completion cost breakdown | `estimated_cost_component()` |
 | Cost by model | Daily model/provider spend | `estimated_cost()`, `metadata.model`, `metadata.provider` |
 | Token count | Uncached, cache-read, and completion tokens | `metrics.*_tokens` |
@@ -119,11 +119,10 @@ The latency chart is built from an ordinary SQL query:
 ```sql
 SELECT
   date_trunc('day', created) AS bucket,
-  percentile(metrics.duration, 0.50) AS p50_duration,
-  percentile(metrics.duration, 0.95) AS p95_duration
+  percentile(CASE WHEN is_root THEN metrics.end - metrics.start ELSE NULL END, 0.50) AS p50_duration,
+  percentile(CASE WHEN is_root THEN metrics.end - metrics.start ELSE NULL END, 0.95) AS p95_duration
 FROM project_logs('<PROJECT_ID>', shape => 'spans')
 WHERE created >= NOW() - INTERVAL 30 DAY
-  AND metrics.duration IS NOT NULL
   AND (span_attributes.purpose IS NULL OR span_attributes.purpose != 'scorer')
 GROUP BY date_trunc('day', created)
 ORDER BY bucket ASC
