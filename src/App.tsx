@@ -15,8 +15,13 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { fetchProjectByName } from './api/braintrust';
+import {
+  fetchConnectionCatalog,
+  type Organization,
+  type Project,
+} from './api/braintrust';
 import LogsTable from './components/LogsTable';
+import SearchableSelect from './components/SearchableSelect';
 import TraceViewer, { type TraceViewerRef } from './components/TraceViewer';
 import { useLogs } from './hooks/useLogs';
 import type { LogRecord, TraceConfig } from './types';
@@ -25,17 +30,23 @@ type View = 'dashboard' | 'traces';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 
+const initialOrg = import.meta.env.VITE_BRAINTRUST_ORG || '';
+const initialProject = import.meta.env.VITE_BRAINTRUST_PROJECT || '';
+
 function App() {
   const traceViewerRef = useRef<TraceViewerRef>(null);
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [baseConfig, setBaseConfig] = useState({
     baseUrl: import.meta.env.VITE_BRAINTRUST_URL || 'https://www.braintrust.dev',
-    org: import.meta.env.VITE_BRAINTRUST_ORG || '',
-    projectName: import.meta.env.VITE_BRAINTRUST_PROJECT || '',
+    org: initialOrg,
+    projectName: initialProject,
     apiKey: import.meta.env.VITE_BRAINTRUST_API_KEY || '',
   });
   const [projectId, setProjectId] = useState('');
-  const [resolvingProject, setResolvingProject] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [connectionError, setConnectionError] = useState('');
   const [daysBack, setDaysBack] = useState(30);
   const [isConfigCollapsed, setIsConfigCollapsed] = useState(false);
@@ -45,46 +56,112 @@ function App() {
   const [isResizing, setIsResizing] = useState(false);
   const [toast, setToast] = useState('');
 
-  const canResolve = Boolean(
-    baseConfig.baseUrl && baseConfig.apiKey && baseConfig.org && baseConfig.projectName,
+  useEffect(() => {
+    const apiKey = baseConfig.apiKey.trim();
+    const controller = new AbortController();
+
+    setProjectId('');
+    setSelectedOrgId('');
+    setOrganizations([]);
+    setProjects([]);
+    setConnectionError('');
+    setSelectedLog(null);
+    setBaseConfig((current) => ({ ...current, org: '', projectName: '' }));
+
+    if (!apiKey) {
+      setLoadingCatalog(false);
+      return () => controller.abort();
+    }
+
+    const timer = window.setTimeout(async () => {
+      setLoadingCatalog(true);
+      try {
+        const catalog = await fetchConnectionCatalog(apiKey, controller.signal);
+        if (catalog.organizations.length === 0) {
+          throw new Error('This API key does not have access to any Braintrust organizations.');
+        }
+
+        setOrganizations(catalog.organizations);
+        setProjects(catalog.projects);
+
+        const preferredOrg =
+          catalog.organizations.find(
+            (organization) => organization.name.toLowerCase() === initialOrg.toLowerCase(),
+          ) || (catalog.organizations.length === 1 ? catalog.organizations[0] : undefined);
+        const orgProjects = preferredOrg
+          ? catalog.projects.filter((project) => project.org_id === preferredOrg.id)
+          : [];
+        const preferredProject =
+          orgProjects.find(
+            (project) => project.name.toLowerCase() === initialProject.toLowerCase(),
+          ) || (orgProjects.length === 1 ? orgProjects[0] : undefined);
+
+        setSelectedOrgId(preferredOrg?.id || '');
+        setProjectId(preferredProject?.id || '');
+        setBaseConfig((current) => ({
+          ...current,
+          org: preferredOrg?.name || '',
+          projectName: preferredProject?.name || '',
+        }));
+        if (preferredProject) setIsConfigCollapsed(true);
+
+        if (catalog.projects.length === 0) {
+          setConnectionError('This API key does not have access to any Braintrust projects.');
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setConnectionError(
+          error instanceof Error ? error.message : 'Could not connect to Braintrust.',
+        );
+      } finally {
+        if (!controller.signal.aborted) setLoadingCatalog(false);
+      }
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [baseConfig.apiKey]);
+
+  const projectsForOrg = useMemo(
+    () => projects.filter((project) => project.org_id === selectedOrgId),
+    [projects, selectedOrgId],
   );
 
-  const resolveProject = useCallback(async () => {
-    if (!canResolve) {
-      setProjectId('');
-      return;
-    }
-    setResolvingProject(true);
-    setConnectionError('');
-    try {
-      const project = await fetchProjectByName(
-        baseConfig.baseUrl,
-        baseConfig.apiKey,
-        decodeURIComponent(baseConfig.org),
-        baseConfig.projectName,
-      );
-      if (!project) {
-        setProjectId('');
-        setConnectionError(`No project named “${baseConfig.projectName}” was found.`);
-        return;
-      }
-      setProjectId(project.id);
-      setIsConfigCollapsed(true);
-    } catch (error) {
-      setProjectId('');
-      setConnectionError(
-        error instanceof Error ? error.message : 'Could not connect to Braintrust.',
-      );
-    } finally {
-      setResolvingProject(false);
-    }
-  }, [baseConfig, canResolve]);
+  const handleOrganizationChange = (orgId: string) => {
+    const organization = organizations.find((candidate) => candidate.id === orgId);
+    const matchingProjects = projects.filter((project) => project.org_id === orgId);
+    const onlyProject = matchingProjects.length === 1 ? matchingProjects[0] : undefined;
 
-  useEffect(() => {
-    if (!canResolve) return;
-    const timer = window.setTimeout(() => void resolveProject(), 450);
-    return () => window.clearTimeout(timer);
-  }, [canResolve, resolveProject]);
+    setSelectedOrgId(orgId);
+    setProjectId(onlyProject?.id || '');
+    setSelectedLog(null);
+    setConnectionError('');
+    setBaseConfig((current) => ({
+      ...current,
+      org: organization?.name || '',
+      projectName: onlyProject?.name || '',
+    }));
+    if (onlyProject) setIsConfigCollapsed(true);
+  };
+
+  const handleProjectChange = (nextProjectId: string) => {
+    const project = projects.find((candidate) => candidate.id === nextProjectId);
+    const organization = project
+      ? organizations.find((candidate) => candidate.id === project.org_id)
+      : organizations.find((candidate) => candidate.id === selectedOrgId);
+
+    setProjectId(nextProjectId);
+    setSelectedLog(null);
+    setConnectionError('');
+    setBaseConfig((current) => ({
+      ...current,
+      org: organization?.name || current.org,
+      projectName: project?.name || '',
+    }));
+    if (project) setIsConfigCollapsed(true);
+  };
 
   const logsParams = useMemo(() => {
     if (activeView !== 'traces' || !baseConfig.apiKey || !projectId) return null;
@@ -142,7 +219,7 @@ function App() {
 
   const updateConfig = (field: keyof typeof baseConfig, value: string) => {
     setBaseConfig((current) => ({ ...current, [field]: value }));
-    if (field === 'projectName' || field === 'org' || field === 'apiKey') {
+    if (field === 'apiKey') {
       setProjectId('');
       setSelectedLog(null);
     }
@@ -216,7 +293,7 @@ function App() {
           </div>
         </section>
 
-        <section className="relative -mt-4 mx-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg sm:mx-6">
+        <section className="relative z-20 -mt-4 mx-3 rounded-2xl border border-slate-200 bg-white shadow-lg sm:mx-6">
           <button
             type="button"
             onClick={() => setIsConfigCollapsed((collapsed) => !collapsed)}
@@ -234,7 +311,11 @@ function App() {
                   )}
                 </div>
                 <p className="truncate text-xs text-slate-400">
-                  {projectId ? `${baseConfig.org} / ${baseConfig.projectName}` : 'Choose the project that powers both experiences'}
+                  {projectId
+                    ? `${baseConfig.org} / ${baseConfig.projectName}`
+                    : loadingCatalog
+                      ? 'Finding the projects this API key can access…'
+                      : 'Enter an API key, then choose a project'}
                 </p>
               </div>
             </div>
@@ -247,40 +328,80 @@ function App() {
                 <ConfigField label="App URL" className="xl:col-span-1">
                   <input value={baseConfig.baseUrl} onChange={(event) => updateConfig('baseUrl', event.target.value)} placeholder="https://www.braintrust.dev" className="config-input" />
                 </ConfigField>
-                <ConfigField label="Organization">
-                  <input value={baseConfig.org} onChange={(event) => updateConfig('org', event.target.value)} placeholder="acme" className="config-input" />
-                </ConfigField>
-                <ConfigField label="Project">
-                  <input value={baseConfig.projectName} onChange={(event) => updateConfig('projectName', event.target.value)} placeholder="production-agent" className="config-input" />
-                </ConfigField>
                 <ConfigField label="API key">
                   <input type="password" value={baseConfig.apiKey} onChange={(event) => updateConfig('apiKey', event.target.value)} placeholder="sk-••••••••" className="config-input" />
                 </ConfigField>
+                <ConfigField label="Organization">
+                  <SearchableSelect
+                    ariaLabel="Organization"
+                    options={organizations.map((organization) => {
+                      const projectCount = projects.filter(
+                        (project) => project.org_id === organization.id,
+                      ).length;
+                      return {
+                        value: organization.id,
+                        label: organization.name,
+                        description: `${projectCount} ${projectCount === 1 ? 'project' : 'projects'}`,
+                      };
+                    })}
+                    value={selectedOrgId}
+                    onChange={handleOrganizationChange}
+                    placeholder={
+                      loadingCatalog
+                        ? 'Loading organizations…'
+                        : baseConfig.apiKey
+                          ? 'Select organization'
+                          : 'Enter API key first'
+                    }
+                    emptyMessage="No matching organizations"
+                    disabled={!baseConfig.apiKey || loadingCatalog || organizations.length === 0}
+                  />
+                </ConfigField>
+                <ConfigField label="Project">
+                  <SearchableSelect
+                    ariaLabel="Project"
+                    options={projectsForOrg.map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                      description: project.id,
+                    }))}
+                    value={projectId}
+                    onChange={handleProjectChange}
+                    placeholder={
+                      loadingCatalog
+                        ? 'Loading projects…'
+                        : selectedOrgId
+                          ? 'Search projects'
+                          : 'Select organization first'
+                    }
+                    emptyMessage="No matching projects"
+                    disabled={!selectedOrgId || loadingCatalog || projectsForOrg.length === 0}
+                  />
+                </ConfigField>
                 <ConfigField label="Lookback">
-                  <div className="flex gap-2">
-                    <select value={daysBack} onChange={(event) => setDaysBack(Number(event.target.value))} className="config-input">
-                      <option value={7}>Last 7 days</option>
-                      <option value={14}>Last 14 days</option>
-                      <option value={30}>Last 30 days</option>
-                      <option value={90}>Last 90 days</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void resolveProject()}
-                      disabled={!canResolve || resolvingProject}
-                      className="inline-flex shrink-0 items-center justify-center rounded-lg bg-violet-600 px-3 text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
-                      aria-label="Connect to project"
-                    >
-                      {resolvingProject ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-                    </button>
-                  </div>
+                  <select value={daysBack} onChange={(event) => setDaysBack(Number(event.target.value))} className="config-input">
+                    <option value={7}>Last 7 days</option>
+                    <option value={14}>Last 14 days</option>
+                    <option value={30}>Last 30 days</option>
+                    <option value={90}>Last 90 days</option>
+                  </select>
                 </ConfigField>
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[11px] leading-5 text-slate-400">
-                  Credentials are relayed to Braintrust for this session and are not persisted by the demo.
+                  Enter an API key to discover its accessible organizations and projects. Credentials are relayed to Braintrust for this session and are not persisted.
                 </p>
-                {connectionError && <p className="text-xs font-medium text-rose-600">{connectionError}</p>}
+                {loadingCatalog ? (
+                  <p className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600">
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Loading access…
+                  </p>
+                ) : connectionError ? (
+                  <p className="max-w-xl text-xs font-medium text-rose-600">{connectionError}</p>
+                ) : projects.length > 0 ? (
+                  <p className="text-xs font-medium text-emerald-700">
+                    {projects.length} accessible {projects.length === 1 ? 'project' : 'projects'}
+                  </p>
+                ) : null}
               </div>
             </div>
           )}
@@ -401,10 +522,10 @@ function App() {
 
 function ConfigField({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <label className={`block ${className}`}>
+    <div className={`block ${className}`}>
       <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
       {children}
-    </label>
+    </div>
   );
 }
 

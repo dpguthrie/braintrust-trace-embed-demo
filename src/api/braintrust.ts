@@ -21,6 +21,17 @@ export interface Project {
   created: string;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  api_url?: string | null;
+}
+
+export interface ConnectionCatalog {
+  organizations: Organization[];
+  projects: Project[];
+}
+
 export function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -30,42 +41,78 @@ export function slugify(text: string): string {
     .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
 }
 
-export async function fetchProjectByName(
-  _baseUrl: string,
-  apiKey: string,
-  orgName: string,
-  projectName: string
-): Promise<Project | null> {
-  try {
-    // Use relative path - will be proxied through serverless function in production
-    const url = new URL('/api/v1/project', window.location.origin);
+async function responseError(response: Response, resource: string): Promise<Error> {
+  const detail = await response.text();
+  return new Error(
+    `Could not load ${resource} (${response.status})${detail ? `: ${detail}` : ''}`,
+  );
+}
 
-    // Add query parameters for filtering
-    url.searchParams.set('project_name', projectName);
-    url.searchParams.set('org_name', orgName);
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch projects: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    // The API should return the matching project directly
-    const project = data.objects?.[0];
-
-    return project || null;
-  } catch (error) {
-    console.error('Error fetching project:', error);
-    throw error;
+function readObjectList<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'objects' in payload &&
+    Array.isArray(payload.objects)
+  ) {
+    return payload.objects as T[];
   }
+  throw new Error('Braintrust returned an unexpected list response.');
+}
+
+export async function fetchOrganizations(
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<Organization[]> {
+  const response = await fetch('/api/apikey/login', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    signal,
+  });
+
+  if (!response.ok) throw await responseError(response, 'organizations');
+
+  const payload = (await response.json()) as { org_info?: Organization[] };
+  if (!Array.isArray(payload.org_info)) {
+    throw new Error('Braintrust returned an unexpected organization response.');
+  }
+  return payload.org_info;
+}
+
+export async function fetchProjects(
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<Project[]> {
+  const response = await fetch('/api/v1/project', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    signal,
+  });
+
+  if (!response.ok) throw await responseError(response, 'projects');
+  return readObjectList<Project>(await response.json());
+}
+
+export async function fetchConnectionCatalog(
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<ConnectionCatalog> {
+  const [organizations, projects] = await Promise.all([
+    fetchOrganizations(apiKey, signal),
+    fetchProjects(apiKey, signal),
+  ]);
+
+  return {
+    organizations: [...organizations].sort((a, b) => a.name.localeCompare(b.name)),
+    projects: [...projects].sort((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 export async function fetchRecentLogs(params: FetchLogsParams): Promise<LogRecord[]> {

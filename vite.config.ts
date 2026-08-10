@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/api/apikey/login': {
+        target: 'https://www.braintrust.dev',
+        changeOrigin: true,
+      },
       '/api/btql': {
         target: 'https://api.braintrust.dev',
         changeOrigin: true,

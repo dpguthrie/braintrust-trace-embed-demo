@@ -15,7 +15,7 @@ The central idea is simple: Braintrust stores rich trace data and exposes it thr
 - **Modern charts** powered by Recharts
 - **Isolated panel failures** so one incompatible query does not blank the whole dashboard
 - **Trace explorer** that queries recent root spans with SQL and opens the selected trace in an embedded Braintrust iframe
-- **Shared configuration** for the dashboard and trace viewer
+- **API-key discovery** with searchable organization and project selectors shared by both experiences
 - **Responsive UI** built with Tailwind CSS
 
 ## Stack
@@ -43,9 +43,11 @@ cp .env.example .env
 
 ```env
 VITE_BRAINTRUST_URL=https://www.braintrust.dev
+VITE_BRAINTRUST_API_KEY=sk_your_api_key
+
+# Optional preferred selections when the key has access to multiple projects
 VITE_BRAINTRUST_ORG=your-org
 VITE_BRAINTRUST_PROJECT=your-project
-VITE_BRAINTRUST_API_KEY=sk_your_api_key
 ```
 
 Then start the app:
@@ -54,7 +56,17 @@ Then start the app:
 pnpm dev
 ```
 
-Open `http://localhost:5173`. You can also leave `.env` unset and enter the connection details in the UI.
+Open `http://localhost:5173`. You can also leave `.env` unset, enter only an API key in the UI, and choose from the organizations and projects that key can access.
+
+## How project discovery works
+
+The app follows the same API-key discovery pattern as Braintrust's CLI:
+
+1. `POST /api/apikey/login` returns the organizations available to the credential, including each organization ID and API URL.
+2. `GET /v1/project` returns every project the credential can read, including its `org_id`.
+3. The app launches both requests together, joins projects to organizations by `org_id`, and populates searchable selectors.
+
+If the key is scoped to one organization, that organization is selected automatically. A single accessible project is also selected automatically; otherwise the user can search by project name or ID.
 
 ## How the custom dashboard works
 
@@ -151,6 +163,11 @@ Selecting a row builds a Braintrust trace URL with the project and root span IDs
 
 ```text
 Browser
+  ├── Connection discovery
+  │     ├── POST /api/apikey/login
+  │     ├── GET /api/v1/project (in parallel)
+  │     └── Searchable organization and project selectors
+  │
   ├── Custom dashboard
   │     ├── 9 SQL queries start in parallel
   │     ├── POST /api/btql
@@ -162,6 +179,8 @@ Browser
         └── Braintrust trace viewer opens in an iframe
 
 Same-origin relay
+  ├── POST https://www.braintrust.dev/api/apikey/login
+  ├── GET https://api.braintrust.dev/v1/project
   └── POST https://api.braintrust.dev/btql
 ```
 
@@ -169,9 +188,10 @@ Same-origin relay
 
 ```text
 src/
-├── api/braintrust.ts              # Project lookup, SQL execution, recent logs
+├── api/braintrust.ts              # Access discovery, SQL execution, recent logs
 ├── components/
 │   ├── Dashboard.tsx              # Monitor-style Recharts visualizations
+│   ├── SearchableSelect.tsx       # Accessible combobox used for orgs/projects
 │   ├── SqlInspector.tsx           # Exact-query modal and copy action
 │   ├── LogsTable.tsx              # Recent root-span browser
 │   └── TraceViewer.tsx            # Reusable Braintrust iframe
@@ -183,8 +203,9 @@ src/
 └── types.ts                       # API, dashboard, and trace types
 
 api/
+├── apikey/login.js                # Vercel relay for API-key organization discovery
 ├── btql.js                        # Vercel relay for SQL requests
-└── v1/project.js                  # Vercel relay for project lookup
+└── v1/project.js                  # Vercel relay for accessible project discovery
 ```
 
 ## Security notes

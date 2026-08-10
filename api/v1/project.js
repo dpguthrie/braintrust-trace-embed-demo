@@ -32,11 +32,9 @@ export default async function handler(req, res) {
       },
     });
 
-    // Get the response data
-    const data = await response.json();
-
-    // Forward the response back to the client
-    res.status(response.status).json(data);
+    const body = await response.text();
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/json');
+    res.status(response.status).send(body);
   } catch (error) {
     console.error('Error proxying to Braintrust API:', error);
     res.status(500).json({ error: 'Failed to fetch project from Braintrust API' });
