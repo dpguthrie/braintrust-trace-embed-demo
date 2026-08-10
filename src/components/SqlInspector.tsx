@@ -1,6 +1,89 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, Code2, Copy, X } from 'lucide-react';
 import type { DashboardQuery } from '../types';
+
+const SQL_KEYWORDS = new Set([
+  'ALL',
+  'AND',
+  'AS',
+  'ASC',
+  'BETWEEN',
+  'BY',
+  'CASE',
+  'DESC',
+  'DISTINCT',
+  'ELSE',
+  'END',
+  'FALSE',
+  'FOR',
+  'FROM',
+  'GROUP',
+  'HAVING',
+  'IN',
+  'INTERVAL',
+  'IS',
+  'LIKE',
+  'LIMIT',
+  'NOT',
+  'NULL',
+  'OFFSET',
+  'OR',
+  'ORDER',
+  'PIVOT',
+  'SELECT',
+  'THEN',
+  'TRUE',
+  'UNPIVOT',
+  'WHEN',
+  'WHERE',
+]);
+
+const SQL_TOKEN_PATTERN =
+  /(--.*$|'(?:''|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b|\s+|.)/g;
+
+function highlightSqlLine(line: string): ReactNode[] {
+  const tokens = line.match(SQL_TOKEN_PATTERN) ?? [' '];
+
+  return tokens.map((token, index) => {
+    let className = 'text-slate-300';
+    const upperToken = token.toUpperCase();
+    const nextToken = tokens.slice(index + 1).find((candidate) => !/^\s+$/.test(candidate));
+
+    if (token.startsWith('--')) {
+      className = 'italic text-slate-500';
+    } else if (/^'(?:''|[^'])*'$/.test(token)) {
+      className = 'text-emerald-300';
+    } else if (/^\d+(?:\.\d+)?$/.test(token)) {
+      className = 'text-amber-300';
+    } else if (SQL_KEYWORDS.has(upperToken)) {
+      className = 'font-semibold text-violet-300';
+    } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(token) && nextToken === '(') {
+      className = 'text-sky-300';
+    } else if (/^(?:=|>|<|!|\+|-|\*|\/|:)$/.test(token)) {
+      className = 'text-pink-300';
+    }
+
+    return (
+      <span key={`${index}-${token}`} className={className}>
+        {token}
+      </span>
+    );
+  });
+}
+
+function SqlLine({ line, number }: { line: string; number: number }) {
+  return (
+    <span className="grid grid-cols-[2rem_auto] text-left">
+      <span
+        aria-hidden="true"
+        className="select-none pr-4 text-right text-slate-600"
+      >
+        {number}
+      </span>
+      <span className="whitespace-pre">{highlightSqlLine(line)}</span>
+    </span>
+  );
+}
 
 interface SqlInspectorProps {
   queries: DashboardQuery[];
@@ -42,7 +125,7 @@ export default function SqlInspector({
       onMouseDown={onClose}
     >
       <div
-        className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#10151f] shadow-2xl"
+        className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#10151f] text-left shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -101,9 +184,15 @@ export default function SqlInspector({
                 {copied ? 'Copied' : 'Copy SQL'}
               </button>
             </div>
-            <pre className="min-h-0 flex-1 overflow-auto p-5 text-[13px] leading-6 text-slate-200">
-              <code>{active.sql}</code>
-            </pre>
+            <div className="min-h-0 flex-1 overflow-auto bg-[#0d121b]">
+              <pre className="min-w-max p-5 text-left font-mono text-[13px] leading-6">
+                <code className="block text-left">
+                  {active.sql.split('\n').map((line, index) => (
+                    <SqlLine key={index} line={line} number={index + 1} />
+                  ))}
+                </code>
+              </pre>
+            </div>
           </div>
         )}
       </div>
