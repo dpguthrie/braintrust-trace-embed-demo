@@ -8,6 +8,12 @@ export interface FetchLogsParams {
   daysBack?: number;
 }
 
+export interface ExecuteSqlParams {
+  apiKey: string;
+  query: string;
+  signal?: AbortSignal;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -74,7 +80,7 @@ export async function fetchRecentLogs(params: FetchLogsParams): Promise<LogRecor
     LIMIT ${limit}
   `;
 
-  // Use proxy endpoint to avoid CORS issues and keep API key secure
+  // Use the same-origin relay endpoint to avoid browser CORS restrictions.
   // In dev: proxied through Vite dev server
   // In production: proxied through serverless function
   const apiEndpoint = '/api/btql';
@@ -97,6 +103,30 @@ export async function fetchRecentLogs(params: FetchLogsParams): Promise<LogRecor
   }
 
   const result: BTQLResponse = await response.json();
+  return result.data || [];
+}
+
+export async function executeSql<T>({
+  apiKey,
+  query,
+  signal,
+}: ExecuteSqlParams): Promise<T[]> {
+  const response = await fetch('/api/btql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ query, fmt: 'json' }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Braintrust SQL returned ${response.status}: ${detail}`);
+  }
+
+  const result = (await response.json()) as BTQLResponse<T>;
   return result.data || [];
 }
 

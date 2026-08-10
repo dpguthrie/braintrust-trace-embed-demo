@@ -1,49 +1,93 @@
-import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import TraceViewer, { type TraceViewerRef } from './components/TraceViewer';
-import LogsTable from './components/LogsTable';
-import { useLogs } from './hooks/useLogs';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Activity,
+  BarChart3,
+  ChevronDown,
+  Code2,
+  Copy,
+  ExternalLink,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  RefreshCw,
+  Search,
+  Settings2,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { fetchProjectByName } from './api/braintrust';
-import type { TraceConfig, LogRecord } from './types';
+import LogsTable from './components/LogsTable';
+import TraceViewer, { type TraceViewerRef } from './components/TraceViewer';
+import { useLogs } from './hooks/useLogs';
+import type { LogRecord, TraceConfig } from './types';
+
+type View = 'dashboard' | 'traces';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
 
 function App() {
   const traceViewerRef = useRef<TraceViewerRef>(null);
-
+  const [activeView, setActiveView] = useState<View>('dashboard');
   const [baseConfig, setBaseConfig] = useState({
     baseUrl: import.meta.env.VITE_BRAINTRUST_URL || 'https://www.braintrust.dev',
     org: import.meta.env.VITE_BRAINTRUST_ORG || '',
     projectName: import.meta.env.VITE_BRAINTRUST_PROJECT || '',
     apiKey: import.meta.env.VITE_BRAINTRUST_API_KEY || '',
   });
-
   const [projectId, setProjectId] = useState('');
-  const [fetchingProjectId, setFetchingProjectId] = useState(false);
-  const [lastFetchedName, setLastFetchedName] = useState('');
-  const [selectedLog, setSelectedLog] = useState<LogRecord | null>(null);
-  const [panelWidth, setPanelWidth] = useState(50); // percentage
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
+  const [resolvingProject, setResolvingProject] = useState(false);
+  const [connectionError, setConnectionError] = useState('');
   const [daysBack, setDaysBack] = useState(30);
   const [isConfigCollapsed, setIsConfigCollapsed] = useState(false);
-  const [hasAutoCollapsed, setHasAutoCollapsed] = useState(false);
+  const [selectedLog, setSelectedLog] = useState<LogRecord | null>(null);
+  const [panelWidth, setPanelWidth] = useState(54);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [toast, setToast] = useState('');
 
-  // URL-encode org and project names for URLs
-  const orgEncoded = useMemo(() => encodeURIComponent(baseConfig.org), [baseConfig.org]);
-  const projectEncoded = useMemo(() => encodeURIComponent(baseConfig.projectName), [baseConfig.projectName]);
+  const canResolve = Boolean(
+    baseConfig.baseUrl && baseConfig.apiKey && baseConfig.org && baseConfig.projectName,
+  );
 
-  const [status, setStatus] = useState<{
-    message: string;
-    type: 'success' | 'error' | 'info' | null;
-  }>({
-    message: '',
-    type: null,
-  });
+  const resolveProject = useCallback(async () => {
+    if (!canResolve) {
+      setProjectId('');
+      return;
+    }
+    setResolvingProject(true);
+    setConnectionError('');
+    try {
+      const project = await fetchProjectByName(
+        baseConfig.baseUrl,
+        baseConfig.apiKey,
+        decodeURIComponent(baseConfig.org),
+        baseConfig.projectName,
+      );
+      if (!project) {
+        setProjectId('');
+        setConnectionError(`No project named “${baseConfig.projectName}” was found.`);
+        return;
+      }
+      setProjectId(project.id);
+      setIsConfigCollapsed(true);
+    } catch (error) {
+      setProjectId('');
+      setConnectionError(
+        error instanceof Error ? error.message : 'Could not connect to Braintrust.',
+      );
+    } finally {
+      setResolvingProject(false);
+    }
+  }, [baseConfig, canResolve]);
+
+  useEffect(() => {
+    if (!canResolve) return;
+    const timer = window.setTimeout(() => void resolveProject(), 450);
+    return () => window.clearTimeout(timer);
+  }, [canResolve, resolveProject]);
 
   const logsParams = useMemo(() => {
-    if (!baseConfig.baseUrl || !baseConfig.apiKey || !projectId) {
-      return null;
-    }
-
+    if (activeView !== 'traces' || !baseConfig.apiKey || !projectId) return null;
     return {
       baseUrl: baseConfig.baseUrl,
       apiKey: baseConfig.apiKey,
@@ -51,472 +95,346 @@ function App() {
       limit: 50,
       daysBack,
     };
-  }, [baseConfig.baseUrl, baseConfig.apiKey, projectId, daysBack]);
+  }, [activeView, baseConfig.apiKey, baseConfig.baseUrl, daysBack, projectId]);
 
-  const { logs, loading, error, refetch } = useLogs(logsParams);
-
-  // Auto-collapse config section when logs are successfully fetched (only once)
-  useEffect(() => {
-    if (logs.length > 0 && !hasAutoCollapsed) {
-      setIsConfigCollapsed(true);
-      setHasAutoCollapsed(true);
-    }
-  }, [logs.length, hasAutoCollapsed]);
+  const { logs, loading: logsLoading, error: logsError, refetch: refetchLogs } = useLogs(logsParams);
 
   const traceConfig: TraceConfig | null = useMemo(() => {
     if (!selectedLog || !projectId) return null;
-
-    const rootSpanId = selectedLog.root_span_id || selectedLog.id;
-
     return {
       baseUrl: baseConfig.baseUrl,
       org: baseConfig.org,
       project: baseConfig.projectName,
       apiKey: baseConfig.apiKey,
       projectId,
-      rootSpanId,
-      // objectType defaults to 'project_logs' and objectId defaults to projectId in TraceViewer
+      rootSpanId: selectedLog.root_span_id || selectedLog.id,
     };
-  }, [selectedLog, baseConfig, projectId]);
+  }, [baseConfig, projectId, selectedLog]);
 
-  // Build the iframe URL for display (with masked API key)
   const traceUrl = useMemo(() => {
     if (!traceConfig) return null;
-
-    const url = new URL(`${traceConfig.baseUrl}/app/${traceConfig.org}/p/${traceConfig.project}/trace`);
-    url.searchParams.set('api_key', '***');
+    const url = new URL(
+      `${traceConfig.baseUrl}/app/${encodeURIComponent(traceConfig.org)}/p/${encodeURIComponent(traceConfig.project)}/trace`,
+    );
+    url.searchParams.set('api_key', '••••••••');
     url.searchParams.set('object_type', 'project_logs');
     url.searchParams.set('object_id', traceConfig.projectId);
     url.searchParams.set('r', traceConfig.rootSpanId);
-
     return url.toString();
   }, [traceConfig]);
 
-  // Build the actual URL with real API key for copying
-  const traceUrlWithApiKey = useMemo(() => {
+  const traceUrlWithKey = useMemo(() => {
     if (!traceConfig) return null;
-
-    const url = new URL(`${traceConfig.baseUrl}/app/${traceConfig.org}/p/${traceConfig.project}/trace`);
+    const url = new URL(
+      `${traceConfig.baseUrl}/app/${encodeURIComponent(traceConfig.org)}/p/${encodeURIComponent(traceConfig.project)}/trace`,
+    );
     url.searchParams.set('api_key', traceConfig.apiKey);
     url.searchParams.set('object_type', 'project_logs');
     url.searchParams.set('object_id', traceConfig.projectId);
     url.searchParams.set('r', traceConfig.rootSpanId);
-
     return url.toString();
   }, [traceConfig]);
 
-  const showStatus = (message: string, type: 'success' | 'error' | 'info') => {
-    setStatus({ message, type });
-    setTimeout(() => {
-      setStatus({ message: '', type: null });
-    }, 5000);
+  const showToast = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 2200);
   };
 
-  // Auto-fetch project ID from project name
-  useEffect(() => {
-    const autoFetchProjectId = async () => {
-      if (!baseConfig.baseUrl || !baseConfig.apiKey || !baseConfig.org || !baseConfig.projectName) {
-        return;
-      }
-
-      // Skip if already fetching or already fetched this project name
-      if (fetchingProjectId || lastFetchedName === baseConfig.projectName) {
-        return;
-      }
-
-      // Mark this project name as attempted
-      setLastFetchedName(baseConfig.projectName);
-      setFetchingProjectId(true);
-
-      try {
-        // Decode org name in case it's URL-encoded from .env
-        const decodedOrg = decodeURIComponent(baseConfig.org);
-
-        const project = await fetchProjectByName(
-          baseConfig.baseUrl,
-          baseConfig.apiKey,
-          decodedOrg,
-          baseConfig.projectName
-        );
-
-        if (project) {
-          setProjectId(project.id);
-          // Only show success status if user has interacted with the form
-          if (hasAttemptedFetch) {
-            showStatus(`Auto-detected project ID from name "${baseConfig.projectName}"`, 'success');
-          }
-        } else {
-          console.warn(`Could not find project "${baseConfig.projectName}" in org "${decodedOrg}"`);
-          // Don't show error on auto-fetch, user will see it when they click "Fetch Recent Logs"
-        }
-      } catch (error) {
-        console.error('Failed to fetch project ID:', error);
-        // Don't show error on auto-fetch, user will see it when they click "Fetch Recent Logs"
-      } finally {
-        setFetchingProjectId(false);
-      }
-    };
-
-    autoFetchProjectId();
-  }, [baseConfig.baseUrl, baseConfig.apiKey, baseConfig.org, baseConfig.projectName, fetchingProjectId, lastFetchedName, hasAttemptedFetch]);
-
-  const handleFetchLogs = () => {
-    setHasAttemptedFetch(true);
-
-    if (!baseConfig.baseUrl || !baseConfig.org || !baseConfig.projectName || !baseConfig.apiKey) {
-      showStatus('Please fill in all base configuration fields', 'error');
-      return;
-    }
-
-    if (!projectId) {
-      const decodedOrg = decodeURIComponent(baseConfig.org);
-      showStatus(
-        `Could not find project "${baseConfig.projectName}" in org "${decodedOrg}". Please check your credentials.`,
-        'error'
-      );
-      return;
-    }
-
-    refetch();
-  };
-
-  const handleSelectLog = (log: LogRecord) => {
-    setSelectedLog(log);
-    showStatus('Trace loaded successfully!', 'success');
-  };
-
-  const handleInputChange = (
-    field: keyof typeof baseConfig,
-    value: string
-  ) => {
-    // If project name changes, reset project ID and last fetched name to allow re-detection
-    if (field === 'projectName' && value !== baseConfig.projectName) {
+  const updateConfig = (field: keyof typeof baseConfig, value: string) => {
+    setBaseConfig((current) => ({ ...current, [field]: value }));
+    if (field === 'projectName' || field === 'org' || field === 'apiKey') {
       setProjectId('');
-      setLastFetchedName('');
-      setHasAttemptedFetch(true); // User is interacting, show feedback
+      setSelectedLog(null);
     }
-    setBaseConfig((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleMouseDown = () => {
-    setIsResizing(true);
   };
 
   const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
+    (event: MouseEvent) => {
       if (!isResizing) return;
-
-      const windowWidth = window.innerWidth;
-      const newWidth = ((windowWidth - e.clientX) / windowWidth) * 100;
-
-      // Constrain between 30% and 80%
-      if (newWidth >= 30 && newWidth <= 80) {
-        setPanelWidth(newWidth);
-      }
+      const width = ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
+      if (width >= 34 && width <= 82) setPanelWidth(width);
     },
-    [isResizing]
+    [isResizing],
   );
 
-  const handleMouseUp = useCallback(() => {
-    setIsResizing(false);
-  }, []);
-
   useEffect(() => {
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      };
-    }
-  }, [isResizing, handleMouseMove, handleMouseUp]);
-
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
-  };
+    if (!isResizing) return;
+    const stop = () => setIsResizing(false);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stop);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', stop);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [handleMouseMove, isResizing]);
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6">
-      <div className="max-w-7xl mx-auto space-y-4">
-        <header className="bg-white rounded-lg shadow-sm p-6">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">
-            Braintrust Trace Viewer Embed Demo
-          </h1>
-          <p className="text-sm text-gray-600">
-            Browse recent logs and click a row to view the trace
-          </p>
-        </header>
-
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <button
-            onClick={() => setIsConfigCollapsed(!isConfigCollapsed)}
-            className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-gray-900">Configuration</h2>
-              {projectId && (
-                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                  ✓ Ready
-                </span>
-              )}
+    <div className="min-h-screen bg-[#f6f7fb] text-slate-900">
+      <header className="border-b border-slate-200/80 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-[1480px] items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-3">
+            <div className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-slate-950 text-white shadow-sm">
+              <span className="absolute -right-2 -top-2 h-7 w-7 rounded-full bg-violet-500" />
+              <Sparkles className="relative h-4 w-4" />
             </div>
-            <svg
-              className={`w-5 h-5 text-gray-500 transition-transform ${isConfigCollapsed ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <div>
+              <p className="text-sm font-semibold tracking-tight text-slate-950">Braintrust Embed Lab</p>
+              <p className="hidden text-[11px] text-slate-400 sm:block">Composable observability for your product</p>
+            </div>
+          </div>
+          <a
+            href="https://www.braintrust.dev/docs"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-violet-700"
+          >
+            Braintrust docs <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-[1480px] px-4 pb-14 pt-8 sm:px-6 lg:px-8">
+        <section className="relative overflow-hidden rounded-3xl bg-slate-950 px-6 py-8 text-white shadow-xl sm:px-9 sm:py-10">
+          <div className="pointer-events-none absolute -right-20 -top-28 h-80 w-80 rounded-full bg-violet-500/25 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-teal-400/15 blur-3xl" />
+          <div className="relative max-w-3xl">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-violet-200">
+              <Code2 className="h-3.5 w-3.5" /> One API, any embedded experience
+            </div>
+            <h1 className="mt-5 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl lg:text-5xl">
+              Bring Braintrust observability into the apps you already use.
+            </h1>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
+              Embed the full trace viewer when you need every detail. Build a completely custom
+              monitor when you need product-native analytics. Braintrust gives you both—and the
+              dashboard starts with ordinary SQL.
+            </p>
+          </div>
+        </section>
+
+        <section className="relative -mt-4 mx-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg sm:mx-6">
+          <button
+            type="button"
+            onClick={() => setIsConfigCollapsed((collapsed) => !collapsed)}
+            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 sm:px-6"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="rounded-lg bg-slate-100 p-2 text-slate-600"><Settings2 className="h-4 w-4" /></span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">Braintrust connection</h2>
+                  {projectId && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Connected
+                    </span>
+                  )}
+                </div>
+                <p className="truncate text-xs text-slate-400">
+                  {projectId ? `${baseConfig.org} / ${baseConfig.projectName}` : 'Choose the project that powers both experiences'}
+                </p>
+              </div>
+            </div>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${isConfigCollapsed ? '-rotate-90' : ''}`} />
           </button>
 
           {!isConfigCollapsed && (
-            <div className="px-6 pb-6 space-y-4 border-t border-gray-200">
-              <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800 mt-4">
-                <strong>Step 1:</strong> Enter your Braintrust credentials, project name, and lookback period. The project ID will be automatically fetched.
+            <div className="border-t border-slate-100 px-5 pb-5 pt-4 sm:px-6">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                <ConfigField label="App URL" className="xl:col-span-1">
+                  <input value={baseConfig.baseUrl} onChange={(event) => updateConfig('baseUrl', event.target.value)} placeholder="https://www.braintrust.dev" className="config-input" />
+                </ConfigField>
+                <ConfigField label="Organization">
+                  <input value={baseConfig.org} onChange={(event) => updateConfig('org', event.target.value)} placeholder="acme" className="config-input" />
+                </ConfigField>
+                <ConfigField label="Project">
+                  <input value={baseConfig.projectName} onChange={(event) => updateConfig('projectName', event.target.value)} placeholder="production-agent" className="config-input" />
+                </ConfigField>
+                <ConfigField label="API key">
+                  <input type="password" value={baseConfig.apiKey} onChange={(event) => updateConfig('apiKey', event.target.value)} placeholder="sk-••••••••" className="config-input" />
+                </ConfigField>
+                <ConfigField label="Lookback">
+                  <div className="flex gap-2">
+                    <select value={daysBack} onChange={(event) => setDaysBack(Number(event.target.value))} className="config-input">
+                      <option value={7}>Last 7 days</option>
+                      <option value={14}>Last 14 days</option>
+                      <option value={30}>Last 30 days</option>
+                      <option value={90}>Last 90 days</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void resolveProject()}
+                      disabled={!canResolve || resolvingProject}
+                      className="inline-flex shrink-0 items-center justify-center rounded-lg bg-violet-600 px-3 text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label="Connect to project"
+                    >
+                      {resolvingProject ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </ConfigField>
               </div>
-
-              <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="baseUrl"
-                  className="block text-sm font-medium text-gray-700 mb-1"
-                >
-                  Braintrust Instance URL
-                </label>
-                <input
-                  id="baseUrl"
-                  type="text"
-                  value={baseConfig.baseUrl}
-                  onChange={(e) => handleInputChange('baseUrl', e.target.value)}
-                  placeholder="https://www.braintrust.dev"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="apiKey"
-                  className="block text-sm font-medium text-gray-700 mb-1"
-                >
-                  API Key
-                </label>
-                <input
-                  id="apiKey"
-                  type="password"
-                  value={baseConfig.apiKey}
-                  onChange={(e) => handleInputChange('apiKey', e.target.value)}
-                  placeholder="sk_..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="org" className="block text-sm font-medium text-gray-700 mb-1">
-                  Organization
-                </label>
-                <input
-                  id="org"
-                  type="text"
-                  value={baseConfig.org}
-                  onChange={(e) => handleInputChange('org', e.target.value)}
-                  placeholder="your-org"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  URL-encoded: {orgEncoded || '(empty)'}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] leading-5 text-slate-400">
+                  Credentials are relayed to Braintrust for this session and are not persisted by the demo.
                 </p>
-              </div>
-
-              <div>
-                <label htmlFor="projectName" className="block text-sm font-medium text-gray-700 mb-1">
-                  Project Name
-                  {fetchingProjectId && (
-                    <span className="ml-2 text-xs text-blue-600">Fetching project ID...</span>
-                  )}
-                  {projectId && !fetchingProjectId && (
-                    <span className="ml-2 text-xs text-green-600">✓ Project ID detected</span>
-                  )}
-                </label>
-                <input
-                  id="projectName"
-                  type="text"
-                  value={baseConfig.projectName}
-                  onChange={(e) => handleInputChange('projectName', e.target.value)}
-                  placeholder="My Project"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  URL-encoded: {projectEncoded || '(empty)'}
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="daysBack" className="block text-sm font-medium text-gray-700 mb-1">
-                Lookback Period (Days)
-              </label>
-              <input
-                id="daysBack"
-                type="number"
-                min="1"
-                max="365"
-                value={daysBack}
-                onChange={(e) => setDaysBack(Math.max(1, Math.min(365, parseInt(e.target.value) || 30)))}
-                placeholder="30"
-                className="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Fetch logs from the last {daysBack} day{daysBack !== 1 ? 's' : ''}
-              </p>
-            </div>
-
-            <button
-              onClick={handleFetchLogs}
-              disabled={loading}
-              className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Fetching Logs...' : 'Fetch Recent Logs'}
-            </button>
-
-            {status.type && (
-              <div
-                className={`p-3 rounded-md text-sm ${
-                  status.type === 'success'
-                    ? 'bg-green-50 text-green-800 border border-green-200'
-                    : status.type === 'error'
-                      ? 'bg-red-50 text-red-800 border border-red-200'
-                      : 'bg-blue-50 text-blue-800 border border-blue-200'
-                }`}
-              >
-                {status.message}
-              </div>
-            )}
-
-            {error && (
-              <div className="p-3 rounded-md text-sm bg-red-50 text-red-800 border border-red-200">
-                <strong>Error:</strong> {error.message}
-              </div>
-            )}
+                {connectionError && <p className="text-xs font-medium text-rose-600">{connectionError}</p>}
               </div>
             </div>
           )}
+        </section>
+
+        <div className="mt-7 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm sm:w-fit">
+          <ViewTab active={activeView === 'dashboard'} onClick={() => setActiveView('dashboard')} icon={<BarChart3 className="h-4 w-4" />} label="Custom dashboard" />
+          <ViewTab active={activeView === 'traces'} onClick={() => setActiveView('traces')} icon={<Search className="h-4 w-4" />} label="Trace explorer" />
         </div>
 
-        {logs.length > 0 && (
-          <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">
-                Recent Logs ({logs.length})
-              </h2>
-              <p className="text-sm text-gray-600 mt-1">
-                Click a log row to view its trace in the panel
-              </p>
-            </div>
-            <div className="max-h-[calc(100vh-400px)] overflow-auto">
-              <LogsTable
-                logs={logs}
-                onSelectLog={handleSelectLog}
-                selectedLogId={selectedLog?.id || selectedLog?.root_span_id}
-              />
-            </div>
-          </div>
-        )}
+        <div className="mt-5">
+          {activeView === 'dashboard' ? (
+            <Suspense fallback={<DashboardFallback />}>
+              <Dashboard apiKey={baseConfig.apiKey} projectId={projectId} projectName={baseConfig.projectName} daysBack={daysBack} />
+            </Suspense>
+          ) : (
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-5 sm:px-6">
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight text-slate-950">Trace explorer</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Query recent root spans with SQL, then open Braintrust’s trace viewer directly inside this app.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refetchLogs()}
+                  disabled={!projectId || logsLoading}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-40"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${logsLoading ? 'animate-spin' : ''}`} /> Refresh traces
+                </button>
+              </div>
+              {!projectId ? (
+                <div className="px-6 py-20 text-center">
+                  <Search className="mx-auto h-6 w-6 text-slate-300" />
+                  <p className="mt-3 text-sm font-medium text-slate-700">Connect a project to browse traces</p>
+                  <p className="mt-1 text-xs text-slate-400">The trace viewer uses the same connection as the dashboard.</p>
+                </div>
+              ) : logsError ? (
+                <div className="m-5 rounded-xl bg-rose-50 p-4 text-sm text-rose-700">{logsError.message}</div>
+              ) : logsLoading && logs.length === 0 ? (
+                <div className="space-y-2 p-5">{Array.from({ length: 7 }).map((_, index) => <div key={index} className="h-12 animate-pulse rounded-lg bg-slate-50" />)}</div>
+              ) : (
+                <div className="max-h-[620px] overflow-auto">
+                  <LogsTable logs={logs} onSelectLog={(log) => setSelectedLog(log)} selectedLogId={selectedLog?.id || selectedLog?.root_span_id} />
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      </main>
 
-        {traceConfig && (
-          <div
-            className="fixed right-0 top-0 h-screen bg-white shadow-2xl border-l border-gray-200 animate-slide-in-right z-50"
-            style={{ width: isFullscreen ? '100vw' : `${panelWidth}vw` }}
-          >
-            {/* Resize handle */}
-            <div
-              className="absolute left-0 top-0 w-1 h-full cursor-col-resize hover:bg-blue-500 hover:w-1.5 transition-all z-10"
-              onMouseDown={handleMouseDown}
-              title="Drag to resize"
+      {traceConfig && (
+        <aside
+          className="fixed right-0 top-0 z-50 h-screen border-l border-slate-200 bg-white shadow-2xl"
+          style={{ width: isFullscreen ? '100vw' : `${panelWidth}vw` }}
+        >
+          {!isFullscreen && (
+            <button
+              type="button"
+              onMouseDown={() => setIsResizing(true)}
+              className="absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition hover:bg-violet-500/40"
+              aria-label="Resize trace viewer"
             />
-
-            <div className="border-b border-gray-200 bg-gray-50">
-              <div className="px-6 py-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-gray-900">Trace Viewer</h2>
+          )}
+          <div className="flex h-full flex-col">
+            <div className="border-b border-slate-200 bg-white">
+              <div className="flex items-center justify-between px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={toggleFullscreen}
-                    className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
-                    title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                  >
-                    {isFullscreen ? (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9h6v6" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                      </svg>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setSelectedLog(null)}
-                    className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-200"
-                    title="Close trace viewer"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                  <span className="rounded-lg bg-violet-50 p-1.5 text-violet-600"><Activity className="h-4 w-4" /></span>
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900">Embedded trace viewer</h2>
+                    <p className="text-[10px] text-slate-400">Rendered by Braintrust</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <IconButton label="Reload trace" onClick={() => traceViewerRef.current?.reload()}><RefreshCw className="h-4 w-4" /></IconButton>
+                  <IconButton label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setIsFullscreen((value) => !value)}>
+                    {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                  </IconButton>
+                  <IconButton label="Close trace viewer" onClick={() => setSelectedLog(null)}><PanelRightClose className="h-4 w-4" /></IconButton>
                 </div>
               </div>
-              {traceUrl && traceUrlWithApiKey && (
-                <div className="px-6 py-3 border-t border-gray-200 bg-white">
-                  <div className="flex items-center gap-2">
-                    <code className="block text-xs text-gray-700 bg-gray-50 px-3 py-2 rounded border border-gray-200 overflow-x-auto whitespace-nowrap flex-1 font-mono">
-                      {traceUrl}
-                    </code>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(traceUrlWithApiKey);
-                        showStatus('URL copied to clipboard!', 'success');
-                      }}
-                      className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-colors flex-shrink-0"
-                      title="Copy URL to clipboard"
-                    >
-                      Copy
-                    </button>
-                  </div>
+              {traceUrl && traceUrlWithKey && (
+                <div className="flex items-center gap-2 border-t border-slate-100 bg-slate-50 px-4 py-2">
+                  <code className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{traceUrl}</code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(traceUrlWithKey);
+                      showToast('Trace URL copied');
+                    }}
+                    className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:text-violet-700"
+                    aria-label="Copy trace URL"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
             </div>
-            <div className="h-[calc(100%-108px)]">
-              <TraceViewer
-                ref={traceViewerRef}
-                config={traceConfig}
-                onLoad={() => console.log('Trace loaded')}
-                onError={() => showStatus('Failed to load trace', 'error')}
-                onMessage={(event) => {
-                  console.log('Message from trace viewer:', event.data);
-                }}
-              />
+            <div className="min-h-0 flex-1">
+              <TraceViewer ref={traceViewerRef} config={traceConfig} />
             </div>
           </div>
-        )}
+        </aside>
+      )}
 
-        {!traceConfig && !loading && logs.length === 0 && projectId && (
-          <div className="bg-white rounded-lg shadow-sm p-12 text-center">
-            <p className="text-gray-500">No logs found for this project in the last 7 days.</p>
-            <p className="text-sm text-gray-400 mt-2">
-              Try a different project or check if logs are being sent to Braintrust.
-            </p>
-          </div>
-        )}
+      {toast && (
+        <div className="fixed bottom-5 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-xs font-medium text-white shadow-xl">
+          <Copy className="h-3.5 w-3.5" /> {toast}
+          <button type="button" onClick={() => setToast('')} aria-label="Dismiss"><X className="h-3 w-3 text-slate-400" /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfigField({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ViewTab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold transition sm:flex-none ${active ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+    >
+      {icon} {label}
+    </button>
+  );
+}
+
+function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} title={label} aria-label={label} className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-800">
+      {children}
+    </button>
+  );
+}
+
+function DashboardFallback() {
+  return (
+    <div className="space-y-5">
+      <div className="h-52 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+      <div className="grid gap-5 xl:grid-cols-2">
+        <div className="h-[340px] animate-pulse rounded-2xl border border-slate-200 bg-white" />
+        <div className="h-[340px] animate-pulse rounded-2xl border border-slate-200 bg-white" />
       </div>
     </div>
   );

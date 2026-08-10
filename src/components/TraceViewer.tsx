@@ -109,7 +109,7 @@ const TraceViewer = forwardRef<TraceViewerRef, TraceViewerProps>(
     }, [onLoad, onError]);
 
     return (
-      <div className="w-full h-full bg-white rounded-lg shadow-sm overflow-hidden">
+      <div className="h-full w-full overflow-hidden bg-white">
         <iframe
           ref={iframeRef}
           src={buildTraceUrl(config)}
