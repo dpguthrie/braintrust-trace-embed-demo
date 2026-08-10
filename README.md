@@ -45,9 +45,8 @@ cp .env.example .env
 VITE_BRAINTRUST_URL=https://www.braintrust.dev
 VITE_BRAINTRUST_API_KEY=sk_your_api_key
 
-# Optional preferred selections when the key has access to multiple projects
+# Optional preferred organization when the key has access to multiple organizations
 VITE_BRAINTRUST_ORG=your-org
-VITE_BRAINTRUST_PROJECT=your-project
 ```
 
 Then start the app:
@@ -66,7 +65,7 @@ The app follows the same API-key discovery pattern as Braintrust's CLI:
 2. `GET /v1/project` returns every project the credential can read, including its `org_id`.
 3. The app launches both requests together, joins projects to organizations by `org_id`, and populates searchable selectors.
 
-If the key is scoped to one organization, that organization is selected automatically. A single accessible project is also selected automatically; otherwise the user can search by project name or ID.
+If the key is scoped to one organization, that organization is selected automatically. Project selection is always explicit: the dashboard does not issue SQL until the user chooses a project by name or ID.
 
 ## How the custom dashboard works
 

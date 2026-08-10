@@ -31,7 +31,6 @@ type View = 'dashboard' | 'traces';
 const Dashboard = lazy(() => import('./components/Dashboard'));
 
 const initialOrg = import.meta.env.VITE_BRAINTRUST_ORG || '';
-const initialProject = import.meta.env.VITE_BRAINTRUST_PROJECT || '';
 
 function App() {
   const traceViewerRef = useRef<TraceViewerRef>(null);
@@ -39,7 +38,7 @@ function App() {
   const [baseConfig, setBaseConfig] = useState({
     baseUrl: import.meta.env.VITE_BRAINTRUST_URL || 'https://www.braintrust.dev',
     org: initialOrg,
-    projectName: initialProject,
+    projectName: '',
     apiKey: import.meta.env.VITE_BRAINTRUST_API_KEY || '',
   });
   const [projectId, setProjectId] = useState('');
@@ -48,7 +47,7 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [connectionError, setConnectionError] = useState('');
-  const [daysBack, setDaysBack] = useState(30);
+  const [daysBack, setDaysBack] = useState(14);
   const [isConfigCollapsed, setIsConfigCollapsed] = useState(false);
   const [selectedLog, setSelectedLog] = useState<LogRecord | null>(null);
   const [panelWidth, setPanelWidth] = useState(54);
@@ -88,23 +87,14 @@ function App() {
           catalog.organizations.find(
             (organization) => organization.name.toLowerCase() === initialOrg.toLowerCase(),
           ) || (catalog.organizations.length === 1 ? catalog.organizations[0] : undefined);
-        const orgProjects = preferredOrg
-          ? catalog.projects.filter((project) => project.org_id === preferredOrg.id)
-          : [];
-        const preferredProject =
-          orgProjects.find(
-            (project) => project.name.toLowerCase() === initialProject.toLowerCase(),
-          ) || (orgProjects.length === 1 ? orgProjects[0] : undefined);
 
         setSelectedOrgId(preferredOrg?.id || '');
-        setProjectId(preferredProject?.id || '');
+        setProjectId('');
         setBaseConfig((current) => ({
           ...current,
           org: preferredOrg?.name || '',
-          projectName: preferredProject?.name || '',
+          projectName: '',
         }));
-        if (preferredProject) setIsConfigCollapsed(true);
-
         if (catalog.projects.length === 0) {
           setConnectionError('This API key does not have access to any Braintrust projects.');
         }
@@ -131,19 +121,16 @@ function App() {
 
   const handleOrganizationChange = (orgId: string) => {
     const organization = organizations.find((candidate) => candidate.id === orgId);
-    const matchingProjects = projects.filter((project) => project.org_id === orgId);
-    const onlyProject = matchingProjects.length === 1 ? matchingProjects[0] : undefined;
 
     setSelectedOrgId(orgId);
-    setProjectId(onlyProject?.id || '');
+    setProjectId('');
     setSelectedLog(null);
     setConnectionError('');
     setBaseConfig((current) => ({
       ...current,
       org: organization?.name || '',
-      projectName: onlyProject?.name || '',
+      projectName: '',
     }));
-    if (onlyProject) setIsConfigCollapsed(true);
   };
 
   const handleProjectChange = (nextProjectId: string) => {
