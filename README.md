@@ -9,8 +9,8 @@ The central idea is simple: Braintrust stores rich trace data and exposes it thr
 
 ## What the demo includes
 
-- **Custom project monitor** with trace volume, error events, latency, token consumption, estimated cost, and model mix
-- **Parallel dashboard execution** using four independent `/btql` requests and `Promise.allSettled`
+- **Custom recreation of Braintrust's built-in Monitor view** with spans, latency, LLM cost, tokens, scores, and tool analytics
+- **Parallel dashboard execution** using nine independent `/btql` requests and `Promise.allSettled`
 - **Exact SQL inspection** for the entire dashboard or an individual chart, including the resolved project ID and time window
 - **Modern charts** powered by Recharts
 - **Isolated panel failures** so one incompatible query does not blank the whole dashboard
@@ -58,16 +58,21 @@ Open `http://localhost:5173`. You can also leave `.env` unset and enter the conn
 
 ## How the custom dashboard works
 
-The dashboard defines four SQL queries in [`src/dashboard/queries.ts`](src/dashboard/queries.ts):
+The dashboard defines nine SQL queries in [`src/dashboard/queries.ts`](src/dashboard/queries.ts). They reproduce the metric families in Braintrust's built-in **All data** Monitor view:
 
 | Query | Powers | Standard Braintrust fields used |
 | --- | --- | --- |
-| Workspace summary | KPI cards | `root_span_id`, `is_root`, `metrics.*`, `error`, `estimated_cost()` |
-| Traffic & reliability | Trace volume, errors, p95 latency | `date_trunc`, `count_distinct`, `percentile` |
-| Token & cost usage | Stacked token chart | `metrics.prompt_tokens`, `metrics.completion_tokens`, `estimated_cost()` |
-| Model mix | Model distribution | `metadata.model`, `span_attributes.type` |
+| Spans | Other spans, LLM calls, and tool calls | `span_attributes.type`, `count` |
+| Latency | Daily p50 and p95 duration | `metrics.duration`, `percentile` |
+| Total LLM cost | Prompt/cache/completion cost breakdown | `estimated_cost_component()` |
+| Cost by model | Daily model/provider spend | `estimated_cost()`, `metadata.model`, `metadata.provider` |
+| Token count | Uncached, cache-read, and completion tokens | `metrics.*_tokens` |
+| Scores | Every project score as a trend line | `UNPIVOT(scores)`, `avg` |
+| Tool executions | Tool-call volume by name | `span_attributes.type`, `span_attributes.name` |
+| Tool error rate | Error percentage by tool | `error`, conditional aggregation |
+| Tool duration | Median duration by tool | `percentile(metrics.duration, 0.5)` |
 
-When the project or lookback window changes, the queries are rebuilt with the real values. [`src/hooks/useDashboard.ts`](src/hooks/useDashboard.ts) launches all four requests together:
+When the project or lookback window changes, the queries are rebuilt with the real values. [`src/hooks/useDashboard.ts`](src/hooks/useDashboard.ts) launches all nine requests together:
 
 ```typescript
 const settled = await Promise.allSettled(
@@ -81,7 +86,16 @@ const settled = await Promise.allSettled(
 );
 ```
 
-`Promise.allSettled` is deliberate: the requests execute concurrently, but each result keeps its own loading, success, error, and duration state. A project with no `metadata.model`, for example, can still render the other monitor panels.
+`Promise.allSettled` is deliberate: the requests execute concurrently, but each result keeps its own loading, success, error, and duration state. A project without scores or tool spans, for example, can still render the rest of the Monitor.
+
+Like Braintrust's built-in Spans, Latency, LLM cost, and Token presets, these queries exclude internal spans created by online scorers:
+
+```sql
+span_attributes.purpose IS NULL
+OR span_attributes.purpose != 'scorer'
+```
+
+The score query uses `UNPIVOT` to discover arbitrary score keys at runtime, so the chart is not tied to names such as `Response Quality` or `Routing Accuracy`.
 
 The client sends standard SQL in the request body:
 
@@ -100,21 +114,22 @@ The Vite development proxy and Vercel function relay that request to `https://ap
 
 ## Example SQL
 
-The traffic chart is built from an ordinary SQL query:
+The latency chart is built from an ordinary SQL query:
 
 ```sql
 SELECT
   date_trunc('day', created) AS bucket,
-  count_distinct(root_span_id) AS trace_count,
-  sum(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS error_count,
-  percentile(CASE WHEN is_root THEN metrics.duration ELSE NULL END, 0.95) AS p95_duration
+  percentile(metrics.duration, 0.50) AS p50_duration,
+  percentile(metrics.duration, 0.95) AS p95_duration
 FROM project_logs('<PROJECT_ID>', shape => 'spans')
 WHERE created >= NOW() - INTERVAL 30 DAY
+  AND metrics.duration IS NOT NULL
+  AND (span_attributes.purpose IS NULL OR span_attributes.purpose != 'scorer')
 GROUP BY date_trunc('day', created)
 ORDER BY bucket ASC
 ```
 
-Open **View 4 SQL queries** in the app—or the **SQL** button on any panel—to see exactly what was sent to Braintrust and copy it into the Braintrust SQL sandbox.
+Open **View 9 SQL queries** in the app—or the **SQL** button on any panel—to see exactly what was sent to Braintrust and copy it into the Braintrust SQL sandbox.
 
 Braintrust recommends SQL syntax for new queries. The API path remains `/btql` for compatibility, but the query language in this demo is SQL, not the legacy pipe-delimited BTQL syntax.
 
@@ -138,7 +153,7 @@ Selecting a row builds a Braintrust trace URL with the project and root span IDs
 ```text
 Browser
   ├── Custom dashboard
-  │     ├── 4 SQL queries start in parallel
+  │     ├── 9 SQL queries start in parallel
   │     ├── POST /api/btql
   │     └── Recharts renders returned JSON rows
   │
@@ -157,7 +172,7 @@ Same-origin relay
 src/
 ├── api/braintrust.ts              # Project lookup, SQL execution, recent logs
 ├── components/
-│   ├── Dashboard.tsx              # KPI cards and Recharts visualizations
+│   ├── Dashboard.tsx              # Monitor-style Recharts visualizations
 │   ├── SqlInspector.tsx           # Exact-query modal and copy action
 │   ├── LogsTable.tsx              # Recent root-span browser
 │   └── TraceViewer.tsx            # Reusable Braintrust iframe

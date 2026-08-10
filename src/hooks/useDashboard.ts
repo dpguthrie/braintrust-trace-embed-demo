@@ -3,9 +3,8 @@ import { executeSql } from '../api/braintrust';
 import { buildDashboardQueries } from '../dashboard/queries';
 import type {
   DashboardQuery,
-  DashboardRow,
   DashboardResults,
-  DashboardRows,
+  MonitorRow,
 } from '../types';
 
 interface UseDashboardParams {
@@ -15,15 +14,20 @@ interface UseDashboardParams {
 }
 
 function emptyResult(key: DashboardQuery['key']) {
-  return { key, status: 'idle' as const, rows: [] as DashboardRow[] };
+  return { key, status: 'idle' as const, rows: [] as MonitorRow[] };
 }
 
 function createEmptyResults(): DashboardResults {
   return {
-    overview: emptyResult('overview'),
-    traffic: emptyResult('traffic'),
-    usage: emptyResult('usage'),
-    models: emptyResult('models'),
+    spans: emptyResult('spans'),
+    latency: emptyResult('latency'),
+    cost: emptyResult('cost'),
+    costByModel: emptyResult('costByModel'),
+    tokens: emptyResult('tokens'),
+    scores: emptyResult('scores'),
+    toolExecutions: emptyResult('toolExecutions'),
+    toolErrors: emptyResult('toolErrors'),
+    toolDuration: emptyResult('toolDuration'),
   };
 }
 
@@ -61,7 +65,7 @@ export function useDashboard(params: UseDashboardParams | null) {
     const settled = await Promise.allSettled(
       queries.map(async (query) => {
         const started = performance.now();
-        const rows = await executeSql<DashboardRows[typeof query.key][number]>({
+        const rows = await executeSql<MonitorRow>({
           apiKey: params.apiKey,
           query: query.sql,
         });

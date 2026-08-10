@@ -1,27 +1,23 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import {
   Activity,
-  AlertTriangle,
-  ArrowUpRight,
-  Bot,
+  Blocks,
   Braces,
-  Clock3,
-  Coins,
-  DatabaseZap,
+  ChartNoAxesColumn,
+  CircleAlert,
+  DollarSign,
+  Gauge,
+  Hexagon,
+  MessageCircle,
   RefreshCw,
-  Sparkles,
   Timer,
 } from 'lucide-react';
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Line,
-  Pie,
-  PieChart,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -31,10 +27,7 @@ import { useDashboard } from '../hooks/useDashboard';
 import type {
   DashboardQuery,
   DashboardQueryResult,
-  ModelRow,
-  OverviewRow,
-  TrafficRow,
-  UsageRow,
+  MonitorRow,
 } from '../types';
 import SqlInspector from './SqlInspector';
 
@@ -45,8 +38,22 @@ interface DashboardProps {
   daysBack: number;
 }
 
-const CHART_COLORS = ['#6d5dfc', '#26b6a6', '#f59e0b', '#ef667d', '#43a6f5', '#a78bfa'];
-const AXIS_STYLE = { fontSize: 11, fill: '#7b8497' };
+type MonitorKey = DashboardQuery['key'];
+type ChartPoint = { bucket: string; [key: string]: string | number };
+type SeriesItem = { key: string; name: string; color: string; value: number };
+
+const PALETTE = [
+  '#8b5cf6',
+  '#3425e8',
+  '#f29345',
+  '#9f2caf',
+  '#5b74f9',
+  '#83c735',
+  '#ef762f',
+  '#14a79b',
+];
+const AXIS_STYLE = { fontSize: 11, fill: '#777b86' };
+const GRID_COLOR = '#eceef2';
 
 function numberValue(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -56,14 +63,17 @@ function numberValue(value: unknown): number {
 
 function compactNumber(value: number): string {
   return new Intl.NumberFormat('en-US', {
-    notation: value >= 1000 ? 'compact' : 'standard',
+    notation: Math.abs(value) >= 1000 ? 'compact' : 'standard',
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-function formatCost(value: number): string {
-  if (value === 0) return '$0.00';
-  if (value < 0.01) return `$${value.toFixed(4)}`;
+function integer(value: number): string {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
+}
+
+function cost(value: number): string {
+  if (value > 0 && value < 0.01) return `$${value.toFixed(4)}`;
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -71,17 +81,84 @@ function formatCost(value: number): string {
   }).format(value);
 }
 
-function formatDuration(seconds: number): string {
-  if (!seconds) return '0 ms';
-  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`;
-  return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`;
+function duration(value: number): string {
+  if (value > 0 && value < 1) return `${Math.round(value * 1000)}ms`;
+  return `${value.toFixed(value < 10 ? 1 : 0)}s`;
+}
+
+function percent(value: number): string {
+  return `${value.toFixed(value < 10 ? 1 : 0)}%`;
 }
 
 function bucketLabel(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    : date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
+}
+
+function total(rows: MonitorRow[], key: keyof MonitorRow): number {
+  return rows.reduce((sum, row) => sum + numberValue(row[key]), 0);
+}
+
+function mean(rows: MonitorRow[], key: keyof MonitorRow): number {
+  const values = rows.map((row) => numberValue(row[key])).filter((value) => value > 0);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function buildDynamicSeries(
+  rows: MonitorRow[],
+  nameKey: 'model' | 'score' | 'tool',
+  valueKey: keyof MonitorRow,
+  aggregate: 'sum' | 'mean' = 'sum',
+  label?: (row: MonitorRow) => string,
+): { data: ChartPoint[]; series: SeriesItem[] } {
+  const grouped = new Map<string, number[]>();
+  for (const row of rows) {
+    const name = label?.(row) || String(row[nameKey] || 'Unknown');
+    const values = grouped.get(name) || [];
+    values.push(numberValue(row[valueKey]));
+    grouped.set(name, values);
+  }
+
+  const ranked = [...grouped.entries()]
+    .map(([name, values]) => ({
+      name,
+      value:
+        aggregate === 'mean'
+          ? values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1)
+          : values.reduce((sum, value) => sum + value, 0),
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8)
+    .map((item, index) => ({
+      ...item,
+      key: `series_${index}`,
+      color: PALETTE[index % PALETTE.length],
+    }));
+
+  const keyByName = new Map(ranked.map((item) => [item.name, item.key]));
+  const points = new Map<string, ChartPoint>();
+  for (const row of rows) {
+    const bucket = String(row.bucket || '');
+    const name = label?.(row) || String(row[nameKey] || 'Unknown');
+    const seriesKey = keyByName.get(name);
+    if (!bucket || !seriesKey) continue;
+    const point = points.get(bucket) || { bucket };
+    point[seriesKey] = numberValue(point[seriesKey]) + numberValue(row[valueKey]);
+    points.set(bucket, point);
+  }
+
+  for (const point of points.values()) {
+    for (const item of ranked) {
+      if (point[item.key] === undefined) point[item.key] = 0;
+    }
+  }
+
+  return {
+    data: [...points.values()].sort((a, b) => a.bucket.localeCompare(b.bucket)),
+    series: ranked,
+  };
 }
 
 export default function Dashboard({
@@ -95,291 +172,239 @@ export default function Dashboard({
     [apiKey, daysBack, projectId],
   );
   const { queries, results, lastUpdated, run, loading } = useDashboard(params);
-  const [sqlKey, setSqlKey] = useState<DashboardQuery['key'] | 'all' | null>(null);
+  const [sqlKey, setSqlKey] = useState<MonitorKey | 'all' | null>(null);
 
-  const overview = (results.overview.rows[0] || {}) as OverviewRow;
-  const traffic = useMemo(
+  const spans = useMemo(
     () =>
-      (results.traffic.rows as TrafficRow[]).map((row) => ({
-        bucket: row.bucket || '',
-        traces: numberValue(row.trace_count),
-        errors: numberValue(row.error_count),
+      results.spans.rows.map((row) => ({
+        bucket: String(row.bucket || ''),
+        other: numberValue(row.other_spans),
+        llm: numberValue(row.llm_calls),
+        tool: numberValue(row.tool_calls),
+      })),
+    [results.spans.rows],
+  );
+  const latency = useMemo(
+    () =>
+      results.latency.rows.map((row) => ({
+        bucket: String(row.bucket || ''),
         p95: numberValue(row.p95_duration),
+        p50: numberValue(row.p50_duration),
       })),
-    [results.traffic.rows],
+    [results.latency.rows],
   );
-  const usage = useMemo(
+  const llmCost = useMemo(
     () =>
-      (results.usage.rows as UsageRow[]).map((row) => ({
-        bucket: row.bucket || '',
-        prompt: numberValue(row.prompt_tokens),
+      results.cost.rows.map((row) => ({
+        bucket: String(row.bucket || ''),
+        uncached: numberValue(row.prompt_uncached_cost),
+        completion: numberValue(row.completion_cost),
+        cached: numberValue(row.prompt_cached_cost),
+        cacheWrite: numberValue(row.cache_write_cost),
+      })),
+    [results.cost.rows],
+  );
+  const tokens = useMemo(
+    () =>
+      results.tokens.rows.map((row) => ({
+        bucket: String(row.bucket || ''),
+        uncached: numberValue(row.prompt_uncached_tokens),
+        cached: numberValue(row.prompt_cached_tokens),
         completion: numberValue(row.completion_tokens),
-        total: numberValue(row.total_tokens),
-        cost: numberValue(row.estimated_cost),
       })),
-    [results.usage.rows],
+    [results.tokens.rows],
   );
-  const models = useMemo(
+  const modelCost = useMemo(
     () =>
-      (results.models.rows as ModelRow[]).map((row, index) => ({
-        name: row.model || 'Unknown',
-        calls: numberValue(row.calls),
-        tokens: numberValue(row.total_tokens),
-        cost: numberValue(row.estimated_cost),
-        color: CHART_COLORS[index % CHART_COLORS.length],
-      })),
-    [results.models.rows],
+      buildDynamicSeries(
+        results.costByModel.rows,
+        'model',
+        'total_cost',
+        'sum',
+        (row) => String(row.model || row.provider || 'Unknown'),
+      ),
+    [results.costByModel.rows],
   );
-
-  const openSql = (key: DashboardQuery['key']) => setSqlKey(key);
+  const scores = useMemo(() => {
+    const normalized = results.scores.rows.map((row) => ({
+      ...row,
+      avg_score: numberValue(row.avg_score) * 100,
+    }));
+    return buildDynamicSeries(normalized, 'score', 'avg_score', 'mean');
+  }, [results.scores.rows]);
+  const toolExecutions = useMemo(
+    () => buildDynamicSeries(results.toolExecutions.rows, 'tool', 'executions'),
+    [results.toolExecutions.rows],
+  );
+  const toolErrors = useMemo(
+    () => buildDynamicSeries(results.toolErrors.rows, 'tool', 'error_rate', 'mean'),
+    [results.toolErrors.rows],
+  );
+  const toolDuration = useMemo(
+    () => buildDynamicSeries(results.toolDuration.rows, 'tool', 'p50_tool_duration', 'mean'),
+    [results.toolDuration.rows],
+  );
 
   if (!params) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center shadow-sm">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-          <DatabaseZap className="h-6 w-6" />
+          <Activity className="h-6 w-6" />
         </div>
         <h2 className="mt-5 text-lg font-semibold text-slate-900">Connect a Braintrust project</h2>
-        <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
-          Add your organization, project, and API key above. This dashboard will run four
-          standard SQL queries in parallel and turn the results into an embedded monitor.
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+          The custom Monitor recreation runs nine standard SQL queries in parallel across
+          spans, latency, cost, tokens, scores, and tool behavior.
         </p>
         <button
           type="button"
           onClick={() => setSqlKey('all')}
-          className="mt-5 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:border-violet-300 hover:text-violet-700"
+          className="mt-5 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:border-violet-300 hover:text-violet-700"
         >
           <Braces className="h-4 w-4" /> Preview the SQL
         </button>
-        {sqlKey && (
-          <SqlInspector queries={queries} onClose={() => setSqlKey(null)} />
-        )}
+        {sqlKey && <SqlInspector queries={queries} onClose={() => setSqlKey(null)} />}
       </div>
     );
   }
 
+  const openSql = (key: MonitorKey) => setSqlKey(key);
+  const spanLegend: SeriesItem[] = [
+    { key: 'other', name: 'Other spans', color: '#8b5cf6', value: total(results.spans.rows, 'other_spans') },
+    { key: 'llm', name: 'LLM calls', color: '#3425e8', value: total(results.spans.rows, 'llm_calls') },
+    { key: 'tool', name: 'Tool calls', color: '#f29345', value: total(results.spans.rows, 'tool_calls') },
+  ];
+  const costLegend: SeriesItem[] = [
+    { key: 'uncached', name: 'Cost (Prompt uncached)', color: '#f29345', value: total(results.cost.rows, 'prompt_uncached_cost') },
+    { key: 'completion', name: 'Cost (Completion)', color: '#3425e8', value: total(results.cost.rows, 'completion_cost') },
+    { key: 'cached', name: 'Cost (Prompt cache read)', color: '#8b5cf6', value: total(results.cost.rows, 'prompt_cached_cost') },
+    { key: 'cacheWrite', name: 'Cost (Cache write)', color: '#9f2caf', value: total(results.cost.rows, 'cache_write_cost') },
+  ].filter((item) => item.value > 0);
+  const tokenLegend: SeriesItem[] = [
+    { key: 'uncached', name: 'Prompt (uncached)', color: '#f29345', value: total(results.tokens.rows, 'prompt_uncached_tokens') },
+    { key: 'cached', name: 'Prompt (cache read)', color: '#8b5cf6', value: total(results.tokens.rows, 'prompt_cached_tokens') },
+    { key: 'completion', name: 'Completion', color: '#3425e8', value: total(results.tokens.rows, 'completion_tokens') },
+  ];
+
   return (
-    <div className="space-y-5">
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5 sm:px-6">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-600/15">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live project data
-              </span>
-              <span className="text-xs text-slate-400">{daysBack}-day window</span>
-            </div>
-            <h2 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
-              {projectName || 'Project'} monitor
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
-              A custom observability surface composed entirely from Braintrust SQL results.
-            </p>
+    <div className="space-y-4">
+      <section className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-sm sm:px-6">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Live project data · {daysBack}-day window
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {lastUpdated && (
-              <span className="hidden text-xs text-slate-400 sm:inline">
-                Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => setSqlKey('all')}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-violet-300 hover:text-violet-700"
-            >
-              <Braces className="h-4 w-4" /> View 4 SQL queries
-            </button>
-            <button
-              type="button"
-              onClick={() => void run()}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-            </button>
-          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+            {projectName || 'Project'} · All data
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            A custom application recreation of Braintrust’s built-in Monitor view.
+          </p>
         </div>
-        <div className="grid border-t border-slate-100 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Traces"
-            value={compactNumber(numberValue(overview.trace_count))}
-            detail={`${compactNumber(numberValue(overview.llm_calls))} LLM calls`}
-            icon={<Activity className="h-4 w-4" />}
-            accent="violet"
-            result={results.overview}
-          />
-          <MetricCard
-            label="Error events"
-            value={compactNumber(numberValue(overview.error_count))}
-            detail={
-              numberValue(overview.trace_count)
-                ? `${((numberValue(overview.error_count) / numberValue(overview.trace_count)) * 100).toFixed(1)} per 100 traces`
-                : 'Across all spans'
-            }
-            icon={<AlertTriangle className="h-4 w-4" />}
-            accent="rose"
-            result={results.overview}
-          />
-          <MetricCard
-            label="Average duration"
-            value={formatDuration(numberValue(overview.avg_duration))}
-            detail={`p95 ${formatDuration(numberValue(overview.p95_duration))}`}
-            icon={<Timer className="h-4 w-4" />}
-            accent="amber"
-            result={results.overview}
-          />
-          <MetricCard
-            label="Estimated cost"
-            value={formatCost(numberValue(overview.estimated_cost))}
-            detail={`${compactNumber(numberValue(overview.total_tokens))} tokens`}
-            icon={<Coins className="h-4 w-4" />}
-            accent="teal"
-            result={results.overview}
-          />
-        </div>
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-5">
-        <Panel
-          className="xl:col-span-3"
-          title="Trace volume"
-          subtitle="Distinct traces and error events per day"
-          icon={<Activity className="h-4 w-4" />}
-          result={results.traffic}
-          onSql={() => openSql('traffic')}
-        >
-          <ChartState result={results.traffic} empty={traffic.length === 0}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={traffic} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="traceFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#6d5dfc" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="#6d5dfc" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#eef0f4" vertical={false} />
-                <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-                <YAxis tick={AXIS_STYLE} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip labelFormatter={(value) => bucketLabel(String(value))} />
-                <Area type="monotone" dataKey="traces" name="Traces" stroke="#6d5dfc" strokeWidth={2.5} fill="url(#traceFill)" />
-                <Line type="monotone" dataKey="errors" name="Errors" stroke="#ef667d" strokeWidth={2} dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </ChartState>
-        </Panel>
-
-        <Panel
-          className="xl:col-span-2"
-          title="p95 trace duration"
-          subtitle="Root-span wall-clock latency by day"
-          icon={<Clock3 className="h-4 w-4" />}
-          result={results.traffic}
-          onSql={() => openSql('traffic')}
-        >
-          <ChartState result={results.traffic} empty={traffic.length === 0}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={traffic} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="latencyFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#f59e0b" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#eef0f4" vertical={false} />
-                <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={(value) => formatDuration(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-                <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value) => [formatDuration(Number(value)), 'p95 duration']} />
-                <Area type="monotone" dataKey="p95" stroke="#f59e0b" strokeWidth={2.5} fill="url(#latencyFill)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </ChartState>
-        </Panel>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-5">
-        <Panel
-          className="xl:col-span-3"
-          title="Token consumption"
-          subtitle="Prompt and completion tokens on LLM spans"
-          icon={<Sparkles className="h-4 w-4" />}
-          result={results.usage}
-          onSql={() => openSql('usage')}
-        >
-          <ChartState result={results.usage} empty={usage.length === 0}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={usage} margin={{ top: 10, right: 8, left: -10, bottom: 0 }}>
-                <CartesianGrid stroke="#eef0f4" vertical={false} />
-                <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={(value) => compactNumber(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
-                <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [compactNumber(Number(value)), name]} />
-                <Bar dataKey="prompt" name="Prompt tokens" stackId="tokens" fill="#6d5dfc" radius={[0, 0, 3, 3]} />
-                <Bar dataKey="completion" name="Completion tokens" stackId="tokens" fill="#26b6a6" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartState>
-        </Panel>
-
-        <Panel
-          className="xl:col-span-2"
-          title="Model mix"
-          subtitle="Share of LLM calls by model"
-          icon={<Bot className="h-4 w-4" />}
-          result={results.models}
-          onSql={() => openSql('models')}
-        >
-          <ChartState result={results.models} empty={models.length === 0}>
-            <div className="flex h-full flex-col sm:flex-row sm:items-center">
-              <div className="h-40 min-w-0 flex-1 sm:h-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={models} dataKey="calls" nameKey="name" innerRadius="55%" outerRadius="82%" paddingAngle={2} stroke="none">
-                      {models.map((model) => <Cell key={model.name} fill={model.color} />)}
-                    </Pie>
-                    <Tooltip formatter={(value) => [compactNumber(Number(value)), 'Calls']} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="min-w-0 flex-1 space-y-2 pb-1 sm:pl-2">
-                {models.slice(0, 5).map((model) => (
-                  <div key={model.name} className="flex items-center justify-between gap-3 text-xs">
-                    <span className="flex min-w-0 items-center gap-2 text-slate-600">
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: model.color }} />
-                      <span className="truncate">{model.name}</span>
-                    </span>
-                    <span className="font-semibold tabular-nums text-slate-900">{compactNumber(model.calls)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </ChartState>
-        </Panel>
-      </div>
-
-      <section className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-teal-50 px-5 py-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 rounded-xl bg-white p-2 text-violet-600 shadow-sm ring-1 ring-violet-100">
-              <DatabaseZap className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">Your data, your interface</h3>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-                Every metric above came from ordinary SQL over the Braintrust API. Change a
-                query, add your own metadata or scores, and this becomes a dashboard tailored
-                to your product and your users.
-              </p>
-            </div>
-          </div>
-          <a
-            href="https://www.braintrust.dev/docs/reference/sql"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 hover:text-violet-900"
+        <div className="flex flex-wrap items-center gap-2">
+          {lastUpdated && (
+            <span className="hidden text-xs text-slate-400 sm:inline">
+              Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setSqlKey('all')}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm hover:border-violet-300 hover:text-violet-700"
           >
-            Braintrust SQL reference <ArrowUpRight className="h-3.5 w-3.5" />
-          </a>
+            <Braces className="h-4 w-4" /> View 9 SQL queries
+          </button>
+          <button
+            type="button"
+            onClick={() => void run()}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
         </div>
       </section>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <MonitorCard title="Spans" icon={<MessageCircle />} result={results.spans} onSql={() => openSql('spans')} empty={spans.length === 0} legend={<Legend totalLabel="Total" totalValue={spanLegend.reduce((sum, item) => sum + item.value, 0)} series={spanLegend} format={integer} />}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={spans} margin={{ top: 12, right: 6, left: -12, bottom: 0 }}>
+              <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+              <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickFormatter={compactNumber} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [integer(Number(value)), name]} />
+              <Bar dataKey="other" name="Other spans" stackId="spans" fill="#8b5cf6" />
+              <Bar dataKey="llm" name="LLM calls" stackId="spans" fill="#3425e8" />
+              <Bar dataKey="tool" name="Tool calls" stackId="spans" fill="#f29345" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </MonitorCard>
+
+        <MonitorCard title="Latency" icon={<Gauge />} result={results.latency} onSql={() => openSql('latency')} empty={latency.length === 0} legend={<Legend series={[
+          { key: 'p95', name: 'P95', color: '#ef762f', value: mean(results.latency.rows, 'p95_duration') },
+          { key: 'p50', name: 'P50', color: '#5b74f9', value: mean(results.latency.rows, 'p50_duration') },
+        ]} format={duration} />}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={latency} margin={{ top: 12, right: 6, left: -10, bottom: 0 }}>
+              <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+              <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickFormatter={(value) => duration(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [duration(Number(value)), name]} />
+              <Line type="monotone" dataKey="p95" name="P95" stroke="#ef762f" strokeWidth={2.5} dot={false} />
+              <Line type="monotone" dataKey="p50" name="P50" stroke="#5b74f9" strokeWidth={2.5} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </MonitorCard>
+
+        <MonitorCard title="Total LLM cost" icon={<DollarSign />} result={results.cost} onSql={() => openSql('cost')} empty={llmCost.length === 0} legend={<Legend totalLabel="Total" totalValue={costLegend.reduce((sum, item) => sum + item.value, 0)} series={costLegend} format={cost} maxVisible={4} />}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={llmCost} margin={{ top: 12, right: 6, left: -4, bottom: 0 }}>
+              <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+              <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickFormatter={(value) => cost(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [cost(Number(value)), name]} />
+              <Bar dataKey="uncached" name="Prompt uncached" stackId="cost" fill="#f29345" />
+              <Bar dataKey="completion" name="Completion" stackId="cost" fill="#3425e8" />
+              <Bar dataKey="cached" name="Prompt cache read" stackId="cost" fill="#8b5cf6" />
+              <Bar dataKey="cacheWrite" name="Cache write" stackId="cost" fill="#9f2caf" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </MonitorCard>
+
+        <MonitorCard title="Total LLM cost by model" icon={<ChartNoAxesColumn />} result={results.costByModel} onSql={() => openSql('costByModel')} empty={modelCost.data.length === 0} legend={<Legend totalLabel="Total (Model / Provider)" totalValue={modelCost.series.reduce((sum, item) => sum + item.value, 0)} series={modelCost.series} format={cost} />}>
+          <DynamicBarChart data={modelCost.data} series={modelCost.series} format={cost} />
+        </MonitorCard>
+
+        <MonitorCard title="Token count" icon={<Blocks />} result={results.tokens} onSql={() => openSql('tokens')} empty={tokens.length === 0} legend={<Legend totalLabel="Total" totalValue={tokenLegend.reduce((sum, item) => sum + item.value, 0)} series={tokenLegend} format={integer} />}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={tokens} margin={{ top: 12, right: 6, left: -4, bottom: 0 }}>
+              <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+              <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickFormatter={compactNumber} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+              <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [integer(Number(value)), name]} />
+              <Bar dataKey="uncached" name="Prompt uncached" stackId="tokens" fill="#f29345" />
+              <Bar dataKey="cached" name="Prompt cache read" stackId="tokens" fill="#8b5cf6" />
+              <Bar dataKey="completion" name="Completion" stackId="tokens" fill="#3425e8" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </MonitorCard>
+
+        <MonitorCard title="Scores" icon={<span className="text-xl font-medium">%</span>} result={results.scores} onSql={() => openSql('scores')} empty={scores.data.length === 0} legend={<Legend series={scores.series} format={percent} />}>
+          <DynamicLineChart data={scores.data} series={scores.series} format={percent} domain={[0, 100]} />
+        </MonitorCard>
+
+        <MonitorCard title="Tool executions" icon={<Hexagon />} result={results.toolExecutions} onSql={() => openSql('toolExecutions')} empty={toolExecutions.data.length === 0} legend={<Legend totalLabel="Total" totalValue={toolExecutions.series.reduce((sum, item) => sum + item.value, 0)} series={toolExecutions.series} format={integer} />}>
+          <DynamicBarChart data={toolExecutions.data} series={toolExecutions.series} format={integer} />
+        </MonitorCard>
+
+        <MonitorCard title="Tool error rate" icon={<CircleAlert />} result={results.toolErrors} onSql={() => openSql('toolErrors')} empty={toolErrors.data.length === 0} legend={<Legend series={toolErrors.series} format={percent} />}>
+          <DynamicLineChart data={toolErrors.data} series={toolErrors.series} format={percent} />
+        </MonitorCard>
+
+        <MonitorCard title="Tool duration (p50)" icon={<Timer />} result={results.toolDuration} onSql={() => openSql('toolDuration')} empty={toolDuration.data.length === 0} legend={<Legend series={toolDuration.series} format={duration} />}>
+          <DynamicLineChart data={toolDuration.data} series={toolDuration.series} format={duration} />
+        </MonitorCard>
+      </div>
 
       {sqlKey && (
         <SqlInspector
@@ -392,120 +417,133 @@ export default function Dashboard({
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  icon,
-  accent,
-  result,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  icon: ReactNode;
-  accent: 'violet' | 'rose' | 'amber' | 'teal';
-  result: DashboardQueryResult;
-}) {
-  const accentClasses = {
-    violet: 'bg-violet-50 text-violet-600',
-    rose: 'bg-rose-50 text-rose-600',
-    amber: 'bg-amber-50 text-amber-600',
-    teal: 'bg-teal-50 text-teal-600',
-  };
-  return (
-    <div className="border-b border-slate-100 p-5 last:border-b-0 sm:border-r sm:[&:nth-child(2)]:border-r-0 xl:border-b-0 xl:[&:nth-child(2)]:border-r xl:last:border-r-0">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-500">{label}</span>
-        <span className={`rounded-lg p-2 ${accentClasses[accent]}`}>{icon}</span>
-      </div>
-      <div className="mt-3 flex min-h-9 items-center">
-        {result.status === 'loading' && result.rows.length === 0 ? (
-          <div className="h-7 w-24 animate-pulse rounded bg-slate-100" />
-        ) : result.status === 'error' ? (
-          <span className="text-sm font-medium text-rose-600">Query failed</span>
-        ) : (
-          <span className="text-3xl font-semibold tracking-tight text-slate-950">{value}</span>
-        )}
-      </div>
-      <p className="mt-1 truncate text-xs text-slate-400">{detail}</p>
-    </div>
-  );
-}
-
-function Panel({
+function MonitorCard({
   title,
-  subtitle,
   icon,
   result,
   onSql,
+  empty,
   children,
-  className = '',
+  legend,
 }: {
   title: string;
-  subtitle: string;
   icon: ReactNode;
   result: DashboardQueryResult;
   onSql: () => void;
+  empty: boolean;
   children: ReactNode;
-  className?: string;
+  legend: ReactNode;
 }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}>
-      <div className="flex items-start justify-between gap-3 px-5 pb-2 pt-5">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <span className="text-violet-600">{icon}</span> {title}
-          </h3>
-          <p className="mt-1 text-xs text-slate-400">{subtitle}</p>
-        </div>
+    <section className="flex min-h-[470px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between px-5 pb-2 pt-5">
+        <h3 className="flex items-center gap-2.5 text-base font-medium text-slate-900">
+          <span className="flex h-6 w-6 items-center justify-center text-slate-900 [&>svg]:h-5 [&>svg]:w-5">{icon}</span>
+          {title}
+        </h3>
         <div className="flex items-center gap-2">
           {result.durationMs !== undefined && (
-            <span className="hidden rounded-full bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-400 sm:inline">
-              {result.durationMs} ms
-            </span>
+            <span className="hidden text-[10px] text-slate-400 lg:inline">{result.durationMs}ms</span>
           )}
-          <button
-            type="button"
-            onClick={onSql}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:border-violet-300 hover:text-violet-700"
-          >
+          <button type="button" onClick={onSql} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-400 hover:bg-slate-50 hover:text-violet-700">
             <Braces className="h-3 w-3" /> SQL
           </button>
         </div>
       </div>
-      <div className="h-[280px] px-4 pb-4 pt-2">{children}</div>
+      <div className="h-[270px] px-3 pt-2">
+        <ChartState result={result} empty={empty}>{children}</ChartState>
+      </div>
+      <div className="mt-auto px-5 pb-5 pt-2">
+        {result.status !== 'error' && !empty ? legend : null}
+      </div>
     </section>
   );
 }
 
-function ChartState({
-  result,
-  empty,
-  children,
+function Legend({
+  series,
+  format,
+  totalLabel,
+  totalValue,
+  maxVisible = 3,
 }: {
-  result: DashboardQueryResult;
-  empty: boolean;
-  children: ReactNode;
+  series: SeriesItem[];
+  format: (value: number) => string;
+  totalLabel?: string;
+  totalValue?: number;
+  maxVisible?: number;
 }) {
+  const visible = series.slice(0, maxVisible);
+  return (
+    <div className="space-y-2.5 text-sm">
+      {totalLabel && totalValue !== undefined && (
+        <div className="flex items-center justify-between gap-3 font-medium text-slate-900">
+          <span className="flex min-w-0 items-center gap-2.5"><span className="h-2.5 w-2.5 shrink-0 bg-slate-500" /> <span className="truncate">{totalLabel}</span></span>
+          <span className="shrink-0 tabular-nums">{format(totalValue)}</span>
+        </div>
+      )}
+      {visible.map((item) => (
+        <div key={item.key} className="flex items-center justify-between gap-3 text-slate-700">
+          <span className="flex min-w-0 items-center gap-2.5"><span className="h-2.5 w-2.5 shrink-0" style={{ backgroundColor: item.color }} /> <span className="truncate">{item.name}</span></span>
+          <span className="shrink-0 font-medium tabular-nums text-slate-900">{format(item.value)}</span>
+        </div>
+      ))}
+      {series.length > maxVisible && <p className="pl-5 text-xs text-slate-400">{series.length - maxVisible} more</p>}
+    </div>
+  );
+}
+
+function DynamicBarChart({ data, series, format }: { data: ChartPoint[]; series: SeriesItem[]; format: (value: number) => string }) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 12, right: 6, left: -4, bottom: 0 }}>
+        <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+        <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+        <YAxis tickFormatter={(value) => compactNumber(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+        <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [format(Number(value)), name]} />
+        {series.map((item, index) => (
+          <Bar key={item.key} dataKey={item.key} name={item.name} stackId="dynamic" fill={item.color} radius={index === series.length - 1 ? [2, 2, 0, 0] : undefined} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function DynamicLineChart({ data, series, format, domain }: { data: ChartPoint[]; series: SeriesItem[]; format: (value: number) => string; domain?: [number, number] }) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ top: 12, right: 6, left: -4, bottom: 0 }}>
+        <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+        <XAxis dataKey="bucket" tickFormatter={bucketLabel} tick={AXIS_STYLE} tickLine={false} axisLine={false} minTickGap={28} />
+        <YAxis domain={domain} tickFormatter={(value) => format(Number(value))} tick={AXIS_STYLE} tickLine={false} axisLine={false} />
+        <Tooltip labelFormatter={(value) => bucketLabel(String(value))} formatter={(value, name) => [format(Number(value)), name]} />
+        {series.map((item) => (
+          <Line key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={item.color} strokeWidth={2.4} dot={false} connectNulls />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ChartState({ result, empty, children }: { result: DashboardQueryResult; empty: boolean; children: ReactNode }) {
   if (result.status === 'loading' && result.rows.length === 0) {
     return <div className="h-full animate-pulse rounded-xl bg-slate-50" />;
   }
   if (result.status === 'error') {
     return (
       <div className="flex h-full flex-col items-center justify-center rounded-xl bg-rose-50 px-6 text-center">
-        <AlertTriangle className="h-5 w-5 text-rose-500" />
-        <p className="mt-2 text-sm font-medium text-rose-800">This panel query failed</p>
+        <CircleAlert className="h-5 w-5 text-rose-500" />
+        <p className="mt-2 text-sm font-medium text-rose-800">This Monitor query failed</p>
         <p className="mt-1 line-clamp-3 max-w-md text-xs leading-5 text-rose-600">{result.error}</p>
       </div>
     );
   }
   if (empty) {
     return (
-      <div className="flex h-full flex-col items-center justify-center rounded-xl bg-slate-50 text-center">
-        <DatabaseZap className="h-5 w-5 text-slate-300" />
+      <div className="flex h-full flex-col items-center justify-center text-center">
+        <ChartNoAxesColumn className="h-5 w-5 text-slate-300" />
         <p className="mt-2 text-sm font-medium text-slate-600">No data in this window</p>
-        <p className="mt-1 text-xs text-slate-400">Try a longer lookback period.</p>
+        <p className="mt-1 text-xs text-slate-400">This chart will populate when matching spans arrive.</p>
       </div>
     );
   }

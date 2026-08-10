@@ -53,59 +53,55 @@ export interface BTQLResponse<T = LogRecord> {
 }
 
 export interface DashboardQuery {
-  key: 'overview' | 'traffic' | 'usage' | 'models';
+  key:
+    | 'spans'
+    | 'latency'
+    | 'cost'
+    | 'costByModel'
+    | 'tokens'
+    | 'scores'
+    | 'toolExecutions'
+    | 'toolErrors'
+    | 'toolDuration';
   name: string;
   description: string;
   sql: string;
 }
 
-export interface OverviewRow {
-  trace_count?: number | null;
+export interface MonitorRow {
+  bucket?: string | null;
+  other_spans?: number | null;
   llm_calls?: number | null;
-  error_count?: number | null;
-  total_tokens?: number | null;
-  estimated_cost?: number | null;
-  avg_duration?: number | null;
+  tool_calls?: number | null;
+  p50_duration?: number | null;
   p95_duration?: number | null;
-}
-
-export interface TrafficRow {
-  bucket?: string;
-  trace_count?: number | null;
-  error_count?: number | null;
-  p95_duration?: number | null;
-}
-
-export interface UsageRow {
-  bucket?: string;
-  prompt_tokens?: number | null;
+  prompt_uncached_cost?: number | null;
+  prompt_cached_cost?: number | null;
+  cache_write_cost?: number | null;
+  completion_cost?: number | null;
+  total_cost?: number | null;
+  model?: string | null;
+  provider?: string | null;
+  prompt_uncached_tokens?: number | null;
+  prompt_cached_tokens?: number | null;
   completion_tokens?: number | null;
   total_tokens?: number | null;
-  estimated_cost?: number | null;
+  score?: string | null;
+  avg_score?: number | null;
+  tool?: string | null;
+  executions?: number | null;
+  error_rate?: number | null;
+  p50_tool_duration?: number | null;
 }
 
-export interface ModelRow {
-  model?: string | null;
-  calls?: number | null;
-  total_tokens?: number | null;
-  estimated_cost?: number | null;
-}
-
-export type DashboardRows = {
-  overview: OverviewRow[];
-  traffic: TrafficRow[];
-  usage: UsageRow[];
-  models: ModelRow[];
-};
+export type DashboardRows = Record<DashboardQuery['key'], MonitorRow[]>;
 
 export type QueryStatus = 'idle' | 'loading' | 'success' | 'error';
-
-export type DashboardRow = OverviewRow | TrafficRow | UsageRow | ModelRow;
 
 export interface DashboardQueryResult {
   key: DashboardQuery['key'];
   status: QueryStatus;
-  rows: DashboardRow[];
+  rows: MonitorRow[];
   durationMs?: number;
   error?: string;
 }
